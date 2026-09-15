@@ -1,3 +1,4 @@
+import datetime as _datetime
 import glob
 import os
 import re
@@ -18,6 +19,52 @@ from config import Config
 # Kalau ternyata kode yang di-comment itu masih mau dipakai suatu saat,
 # tinggal import lagi.
 # ============================================================
+
+
+# ============================================================
+# ADAPTER FORMAT FILE: xlrd (.xls, engine lama) HANYA BISA baca .xls,
+# TIDAK BISA baca .xlsx sama sekali (dihapus dukungannya sejak xlrd 2.0).
+# Supaya barcode_generator bisa terima DUA-DUANYA (.xls dan .xlsx, karena
+# contoh file dari mentor ternyata .xlsx), dibuat adapter tipis di sini -
+# jadi seluruh kode grouping & pemrosesan di bawah TETAP sama, tidak perlu
+# tahu file aslinya .xls atau .xlsx.
+# ============================================================
+class _XlsxSheetAdapter:
+    """Meniru interface xlrd Sheet (cell_value(row, col), .nrows) tapi baca .xlsx via openpyxl."""
+
+    def __init__(self, ws):
+        self._ws = ws
+        self.nrows = ws.max_row
+
+    def cell_value(self, row, col):
+        # xlrd: index 0-based. openpyxl: index 1-based. +1 di sini menjembataninya.
+        val = self._ws.cell(row=row + 1, column=col + 1).value
+        return '' if val is None else val
+
+
+class _XlsxWorkbookAdapter:
+    """Meniru xlrd Book (cuma butuh .datemode, tidak dipakai untuk .xlsx
+    karena openpyxl sudah otomatis balikin objek datetime, bukan serial number)."""
+    datemode = 0
+
+
+def _open_sheet(input_path):
+    """Buka file .xls ATAU .xlsx, return (workbook_like, sheet_like) dengan
+    interface seragam (nrows, cell_value) supaya sisa kode tidak perlu tahu
+    bedanya."""
+    ext = os.path.splitext(input_path)[1].lower()
+
+    if ext == '.xls':
+        wb = xlrd.open_workbook(input_path)
+        return wb, wb.sheet_by_index(0)
+
+    if ext == '.xlsx':
+        import openpyxl
+        wb_raw = openpyxl.load_workbook(input_path, data_only=True)
+        ws_raw = wb_raw.worksheets[0]
+        return _XlsxWorkbookAdapter(), _XlsxSheetAdapter(ws_raw)
+
+    raise ValueError(f"Format file tidak didukung: '{ext}' (harus .xls atau .xlsx)")
 
 
 # ============================================================
@@ -80,8 +127,15 @@ def find_material_info(item_code: str, colour: str, material_map: dict) -> dict:
 def format_batchno(date_value, workbook):
     month_letters = "ABCDEFGHIJKL"
     try:
+        # Kasus file .xlsx (openpyxl): tanggal sudah berupa objek datetime asli
+        if isinstance(date_value, (_datetime.datetime, _datetime.date)):
+            month = date_value.month
+            year = date_value.year % 100
+            return f"{month_letters[month - 1]}{year:02d}"
+
+        # Kasus file .xls (xlrd): tanggal berupa serial number
         if isinstance(date_value, (float, int)):
-            dt = xlrd.xldate_as_tuple(date_value, workbook.datemode)
+            dt = xlrd.xldate_as_tuple(date_value, getattr(workbook, "datemode", 0))
             month = dt[1]
             year = dt[0] % 100
             return f"{month_letters[month - 1]}{year:02d}"
@@ -304,8 +358,7 @@ def count_groups(input_path):
     Dipanggil job_manager SAAT FILE DI-UPLOAD, cuma untuk tahu berapa
     total grup (buat progress bar) - cepat, tidak menyentuh DB/foto.
     """
-    wb_input = xlrd.open_workbook(input_path)
-    ws_input = wb_input.sheet_by_index(0)
+    _, ws_input = _open_sheet(input_path)
     return len(_group_rows(ws_input))
 
 
@@ -453,8 +506,7 @@ def process_barcode_excel(input_path, output_dir, on_group_done=None):
 
     conn = get_db_connection()
     try:
-        wb_input = xlrd.open_workbook(input_path)
-        ws_input = wb_input.sheet_by_index(0)
+        wb_input, ws_input = _open_sheet(input_path)
         grouped_data = _group_rows(ws_input)
 
         results = []
