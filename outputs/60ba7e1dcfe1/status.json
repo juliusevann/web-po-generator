@@ -1,0 +1,1 @@
+{"id": "60ba7e1dcfe1", "original_filename": "testing_po.xlsx", "created_at": "2026-09-15T09:26:58.063646", "status": "error", "total": 9, "completed": 0, "current_po_code": "10018", "results": [], "zip_path": null, "error": "cannot import name 'com_lock' from 'core' (unknown location)", "claimed_by_worker": 1}

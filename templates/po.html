@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PO Generator</title>
+<link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+  <div class="wrap">
+    <header class="topbar">
+      <div class="mark">PO<span>·</span>GEN</div>
+      <div class="topbar-sub">Excel &amp; PDF Purchase Order Generator</div>
+    </header>
+
+    <main class="panel">
+
+      <section id="stage-upload" class="stage">
+        <h1>Proses file PO</h1>
+        <p class="hint">Upload file Excel dengan kolom <code>KODE_PO</code> dan <code>REF</code>. Setiap baris akan digenerate menjadi 1 file Excel PO dan 1 file PDF.</p>
+
+        <label id="dropzone" for="file-input" class="dropzone">
+          <input type="file" id="file-input" accept=".xlsx,.xls" hidden>
+          <div class="dz-icon">⇪</div>
+          <div class="dz-text">
+            <strong>Klik untuk pilih file</strong>
+            <span>atau tarik &amp; lepas file .xlsx di sini</span>
+          </div>
+          <div class="dz-filename" id="dz-filename"></div>
+        </label>
+
+        <button id="btn-process" class="btn-primary" disabled>Proses File</button>
+        <p class="error-msg" id="upload-error"></p>
+      </section>
+
+      <section id="stage-progress" class="stage hidden">
+        <h1>Memproses PO</h1>
+        <p class="hint" id="progress-subtitle">Menunggu giliran di antrian...</p>
+
+        <div class="progress-track">
+          <div class="progress-fill" id="progress-fill"></div>
+        </div>
+        <div class="progress-numbers">
+          <span id="progress-count">0 / 0</span>
+          <span id="progress-current"></span>
+        </div>
+
+        <div class="row-list" id="row-list"></div>
+      </section>
+
+      <section id="stage-done" class="stage hidden">
+        <h1 id="done-title">Selesai</h1>
+        <p class="hint" id="done-summary"></p>
+
+        <a id="btn-download" class="btn-primary" href="#" download>Download Hasil (.zip)</a>
+
+        <div class="output-structure">
+          <div class="folder-line">📁 <strong>output.zip</strong></div>
+          <div class="folder-line indent">📁 PDF <span class="muted">— semua file PDF PO</span></div>
+          <div class="folder-line indent">📁 PO <span class="muted">— semua file Excel PO</span></div>
+          <div class="folder-line indent" id="failed-log-line">📄 FAILED_LOG.xlsx <span class="muted">— daftar baris yang gagal diproses</span></div>
+        </div>
+
+        <div class="row-list" id="row-list-done"></div>
+
+        <button id="btn-reset" class="btn-secondary">Proses file lain</button>
+      </section>
+
+    </main>
+
+    <p class="back-link"><a href="{{ url_for('landing') }}">← Kembali ke menu</a></p>
+  </div>
+
+  <script src="{{ url_for('static', filename='po.js') }}"></script>
+</body>
+</html>

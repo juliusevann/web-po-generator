@@ -1,0 +1,1 @@
+{"id": "95c671a0ead3", "original_filename": "testing_po.xlsx", "created_at": "2026-09-15T08:52:38.916012", "status": "error", "total": 9, "completed": 0, "current_po_code": null, "results": [], "zip_path": null, "error": "No module named 'core.excel_generator'", "claimed_by_worker": 2}

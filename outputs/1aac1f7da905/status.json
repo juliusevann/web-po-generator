@@ -1,0 +1,1 @@
+{"id": "1aac1f7da905", "original_filename": "testing_po.xlsx", "created_at": "2026-09-15T09:24:46.742673", "status": "error", "total": 9, "completed": 0, "current_po_code": null, "results": [], "zip_path": null, "error": "cannot import name 'generate_po_excel' from 'core.excel_generator' (D:\\EVERBEST\\NEW_GENERATOR\\webapp\\core\\excel_generator.py)", "claimed_by_worker": 1}
