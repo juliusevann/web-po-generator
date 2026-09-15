@@ -1,0 +1,17 @@
+# Environment and secrets
+.env
+
+# Python cache
+__pycache__/
+*.py[cod]
+
+# Generated outputs
+outputs/
+outputs_barcode/
+
+# Uploaded files
+uploads/
+
+# Temporary Excel files
+~$*.xlsx
+~$*.xls

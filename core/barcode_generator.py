@@ -486,9 +486,6 @@ def _process_group(conn, wb_input, ws_input, group_key, rows, material_map, outp
     return output_subfolder
 
 
-# ============================================================
-# ENTRY POINT UTAMA - dipanggil oleh barcode_job_manager.py
-# ============================================================
 def process_barcode_excel(input_path, output_dir, on_group_done=None):
     """
     Proses 1 file excel upload jadi banyak folder barcode (1 folder per grup).
