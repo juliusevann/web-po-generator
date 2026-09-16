@@ -10,25 +10,7 @@ import xlwt
 
 from config import Config
 
-# ============================================================
-# CONCERN: import cv2, qrcode, PIL (Image), numpy DIHAPUS dari versi asli.
-# Di script asli, semua kode yang benar-benar memakai library itu (sketch
-# processing pakai cv2, bikin QR code pakai qrcode) sudah di-comment-out
-# semua - jadi library itu sebenarnya tidak dipakai di jalur aktif mana pun.
-# Menghapusnya mengurangi dependency yang wajib diinstall di server web.
-# Kalau ternyata kode yang di-comment itu masih mau dipakai suatu saat,
-# tinggal import lagi.
-# ============================================================
 
-
-# ============================================================
-# ADAPTER FORMAT FILE: xlrd (.xls, engine lama) HANYA BISA baca .xls,
-# TIDAK BISA baca .xlsx sama sekali (dihapus dukungannya sejak xlrd 2.0).
-# Supaya barcode_generator bisa terima DUA-DUANYA (.xls dan .xlsx, karena
-# contoh file dari mentor ternyata .xlsx), dibuat adapter tipis di sini -
-# jadi seluruh kode grouping & pemrosesan di bawah TETAP sama, tidak perlu
-# tahu file aslinya .xls atau .xlsx.
-# ============================================================
 class _XlsxSheetAdapter:
     """Meniru interface xlrd Sheet (cell_value(row, col), .nrows) tapi baca .xlsx via openpyxl."""
 
@@ -67,10 +49,6 @@ def _open_sheet(input_path):
     raise ValueError(f"Format file tidak didukung: '{ext}' (harus .xls atau .xlsx)")
 
 
-# ============================================================
-# CACHE (lazy-loaded, supaya tidak baca file Excel master berkali-kali
-# tiap job baru - sama pola seperti _photo_index_cache di excel_generator.py)
-# ============================================================
 _material_map_cache = None
 _eb_description_map_cache = None
 
@@ -337,9 +315,6 @@ def is_first3_non_digit(code: str) -> bool:
     return not code[:3].isdigit()
 
 
-# ============================================================
-# GROUPING
-# ============================================================
 def _group_rows(ws_input):
     """Mengelompokkan baris input jadi grup (po - item - store)."""
     grouped_data = {}
@@ -362,9 +337,6 @@ def count_groups(input_path):
     return len(_group_rows(ws_input))
 
 
-# ============================================================
-# PROSES 1 GRUP (persis logic dari script asli, dipindah ke fungsi)
-# ============================================================
 def _process_group(conn, wb_input, ws_input, group_key, rows, material_map, output_dir):
     wb_output = xlwt.Workbook()
     ws_output = wb_output.add_sheet('tblbarcode')
