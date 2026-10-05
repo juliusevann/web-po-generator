@@ -294,18 +294,48 @@ def score_photo(filename, item_code, colour):
 
 
 def find_best_photo(item_code, colour):
-    photo_folder = Config.BARCODE_PHOTO_FOLDER
+    photo_folder = os.path.join(
+        Config.BARCODE_PHOTO_FOLDER,
+        "barcode label"
+    )
+
     best_photo = None
     best_score = -1
 
-    for ext in ('*.JPG', '*.JPEG', '*.PNG'):
-        for photo in glob.glob(os.path.join(photo_folder, ext)):
+    if not os.path.exists(photo_folder):
+        print(
+            f"[BARCODE][WARNING] Folder barcode_label tidak ditemukan: {photo_folder}",
+            flush=True
+        )
+        return None, best_score
+
+    for root, _, files in os.walk(photo_folder):
+        for filename in files:
+            ext = os.path.splitext(filename)[1].lower()
+
+            if ext not in ('.jpg', '.jpeg', '.png'):
+                continue
+
+            photo = os.path.join(root, filename)
+
             s = score_photo(photo, item_code, colour)
+
             if s > best_score:
                 best_score = s
                 best_photo = photo
 
-    return (best_photo, best_score) if best_score > 0 else (None, best_score)
+    if best_photo:
+        print(
+            f"[BARCODE] PHOTO CANDIDATE [{best_score}] "
+            f"{item_code} / {colour} :: {best_photo}",
+            flush=True
+        )
+
+    return (
+        (best_photo, best_score)
+        if best_score > 0
+        else (None, best_score)
+    )
 
 
 def is_first3_non_digit(code: str) -> bool:
