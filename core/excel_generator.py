@@ -1,5 +1,10 @@
+import hashlib
 import os
 import re
+import shutil
+import tempfile
+import threading
+import time
 import warnings
 
 import pandas as pd
@@ -436,18 +441,22 @@ def safe_set_cell(cell, value):
 
 
 def get_po_data_from_api(gl_souche, gl_numero):
+    location = "CWH" if gl_souche == "JKT" else "WMKR"
+    url = f"{Config.PO_API_BASE_URL}/vh_vl?gl_souche={location}&gl_numero={gl_numero}"
+    print(f"[API] GET {url}", flush=True)
+    t0 = time.time()
     try:
-        location = "CWH" if gl_souche =="JKT" else "WMKR"
-        url = f"{Config.PO_API_BASE_URL}/vh_vl?gl_souche={location}&gl_numero={gl_numero}"
-        # f"http://10.1.2.11:5000/vh_vl?gl_souche={location}&gl_numero={gl_numero}"
-        response = requests.get(url)
+        # timeout=(connect, read) -> tidak akan menggantung selamanya
+        response = requests.get(url, timeout=(5, 30))
+        print(f"[API] status={response.status_code} dalam {time.time() - t0:.1f}s", flush=True)
         if response.status_code == 200:
-            return  response.json()
-        else:
-            print(f"[ERROR] Gagal panggil API untuk PO {gl_numero} | Status code: {response.status_code}")
+            return response.json()
+        print(f"[ERROR] Gagal panggil API untuk PO {gl_numero} | Status code: {response.status_code}", flush=True)
+    except requests.exceptions.Timeout:
+        print(f"[ERROR] API TIMEOUT untuk PO {gl_numero} setelah {time.time() - t0:.1f}s | URL={url}", flush=True)
     except requests.exceptions.RequestException as e:
-        print(f"[ERROR] Request exception untuk PO {gl_numero}: {e}")
-    
+        print(f"[ERROR] Request exception untuk PO {gl_numero}: {e}", flush=True)
+
     return None
 
 def read_header_value(ws, row, col):
@@ -472,6 +481,383 @@ def build_size_qty_map(color_obj):
         if size:
             result[size] = qty
     return result
+
+
+# ==========================================================================
+# TEMPLATE BARU: PO TH (TRH) & PO VH (VBH)  -- layout kedua template IDENTIK
+#
+#   B2:C2   PO NO  (anchor B2)          B4:C4  DATE (anchor B4)
+#   B5:C5   TO     (anchor B5, default template ": EDE")
+#
+#   Tabel item = 4 baris warna (11-14):
+#       A11:A12 DESCRIPTION (merged) | B11 DEVELOP CODE (=> rumus A28)
+#       C11 STYLE NAME (=> rumus A29) | D11:D14 COLOUR (=> rumus label foto row 38)
+#       E11:E14 QTY | F11:F14 COST (angka) | G11:G14 AMOUNT = rumus F*E
+#       A13 "Material :" , A14 "Lining :"  (teks kolom A, overflow ke B/C)
+#       E15 / G15 = rumus SUM  -> JANGAN ditimpa
+#   B17:C18 Delivery Date (anchor B17)
+#   Foto: A30:B37, C30:D37, E30:F37, G30:H37
+#   Label warna baris 38 = RUMUS (=D11..D14) -> JANGAN ditulis manual
+# ==========================================================================
+THVH_ITEM_ROWS = [11, 12, 13, 14]
+THVH_PICTURE_BLOCKS = ["A30:B37", "C30:D37", "E30:F37", "G30:H37"]
+_EMPTY_TOKENS = {"", "-", "none", "null", "nan"}
+
+
+def _clean(value):
+    """String rapi, atau '' kalau kosong / '-' / None."""
+    if value is None:
+        return ""
+    text = str(value).strip()
+    return "" if text.lower() in _EMPTY_TOKENS else text
+
+
+def _to_float(value):
+    """'US$ 1,234.50' / '$ 12.5' / 12 / None -> float (default 0.0)."""
+    if value is None:
+        return 0.0
+    if isinstance(value, (int, float)):
+        return float(value)
+    text = re.sub(r"[^0-9.\-]", "", str(value).replace(",", ""))
+    try:
+        return float(text) if text not in ("", "-", ".") else 0.0
+    except ValueError:
+        return 0.0
+
+
+def _to_int(value):
+    return int(round(_to_float(value)))
+
+
+def _colon(value):
+    """Pastikan teks diawali ': ' (konsisten dengan template)."""
+    text = _clean(value)
+    if not text:
+        return ":"
+    return text if text.startswith(":") else f": {text}"
+
+
+def _join_materials(materials, keys):
+    out = []
+    for m in materials or []:
+        label = _clean(m.get("label")).lower()
+        value = _clean(m.get("value"))
+        if value and any(k in label for k in keys) and value not in out:
+            out.append(value)
+    return ", ".join(out)
+
+
+def build_color_rows(colors):
+    """Normalisasi warna API -> list dict(color, qty, price). Warna kosong/'-' dibuang."""
+    rows = []
+    for c in colors or []:
+        name = _clean(c.get("color"))
+        if not name:
+            continue
+        qty = 0
+        for s in c.get("sets", []) or []:
+            qty += _to_int(s.get("qty"))
+        rows.append({"color": name, "qty": qty, "price": _to_float(c.get("price"))})
+    return rows
+
+
+def resolve_codes(api_data):
+    """
+    Return (develop_code, style_name).
+      - nama artikel diawali angka (mis. 271TR012) = kode internal
+            -> DEVELOP CODE = kode itu, STYLE NAME = style_code
+      - nama artikel bukan kode (mis. AVENIA)
+            -> STYLE NAME = nama itu, DEVELOP CODE = develop/supplier code
+    """
+    article = api_data.get("article", {}) or {}
+    name = _clean(article.get("name"))
+    style_code = _clean(api_data.get("style_code"))
+    explicit_dev = _clean(api_data.get("develop_code") or article.get("develop_code"))
+    supplier = _clean(api_data.get("supplier_code"))
+
+    if name[:1].isdigit():
+        develop = explicit_dev or name
+        style = style_code or _clean(api_data.get("article_name_vl")) or name
+    else:
+        style = name or style_code
+        develop = explicit_dev or supplier or (style_code if style_code != style else "")
+    return develop, style
+
+
+def find_photo(photo_index, article_candidates, color_name):
+    color_key = normalize(str(color_name or ""))
+    for cand in article_candidates or []:
+        path = photo_index.get((normalize(str(cand)), color_key))
+        if path:
+            return path
+    return None
+
+
+def _put(ws, addr, value):
+    """Tulis ke 1 sel; error tidak menghentikan proses."""
+    try:
+        ws.range(addr).value = value
+        return True
+    except Exception as e:
+        print(f"[TH/VH] gagal tulis {addr}: {e}", flush=True)
+        return False
+
+
+def _clear(ws, addr):
+    try:
+        ws.range(addr).clear_contents()
+    except Exception as e:
+        print(f"[TH/VH] gagal clear {addr}: {e}", flush=True)
+
+
+def _prepare_local_photo(src, max_px=1200, timeout=20):
+    """
+    Salin foto dari share jaringan ke folder temp lokal (dengan batas waktu),
+    lalu perkecil kalau terlalu besar. Return path lokal, atau None kalau gagal/timeout.
+    Excel jauh lebih cepat & stabil memasukkan gambar dari disk lokal.
+    """
+    cache_dir = os.path.join(tempfile.gettempdir(), "po_photo_cache")
+    os.makedirs(cache_dir, exist_ok=True)
+    key = hashlib.md5(src.encode("utf-8", "ignore")).hexdigest()[:12]
+    ext = os.path.splitext(src)[1].lower() or ".png"
+    raw = os.path.join(cache_dir, f"{key}_raw{ext}")
+    small = os.path.join(cache_dir, f"{key}_small{ext}")
+
+    if os.path.exists(small):  # sudah pernah diproses
+        return small
+
+    t0 = time.time()
+    state = {}
+
+    def _copy():
+        try:
+            part = raw + ".part"
+            shutil.copyfile(src, part)
+            os.replace(part, raw)
+            state["ok"] = True
+        except Exception as e:
+            state["err"] = e
+
+    th = threading.Thread(target=_copy, daemon=True)
+    th.start()
+    th.join(timeout)
+    if th.is_alive():
+        print(f"[IMG] TIMEOUT salin foto >{timeout}s: {src}", flush=True)
+        return None
+    if not state.get("ok"):
+        print(f"[IMG] gagal salin foto: {state.get('err')} | {src}", flush=True)
+        return None
+    print(f"[IMG] salin foto {time.time() - t0:.1f}s | {os.path.getsize(raw) / 1024:.0f} KB", flush=True)
+
+    try:  # perkecil bila PIL tersedia
+        from PIL import Image
+        im = Image.open(raw)
+        im.load()
+        if max(im.size) > max_px:
+            im.thumbnail((max_px, max_px))
+        if ext in (".jpg", ".jpeg") and im.mode not in ("RGB", "L"):
+            im = im.convert("RGB")
+        im.save(small)
+        im.close()
+        return small
+    except Exception as e:
+        print(f"[IMG] resize dilewati ({e}); pakai file asli lokal", flush=True)
+        return raw
+
+
+def _insert_fit_picture(ws, path, block_addr, padding=4):
+    """
+    Taruh gambar di tengah blok merged, proporsional.
+    Ukuran dihitung di Python (PIL) lalu dimasukkan dalam SATU panggilan Shapes.AddPicture
+    dengan width/height eksplisit (sama seperti cara lama yang stabil), tanpa baca/ubah
+    ukuran bolak-balik lewat COM.
+    """
+    print(f"[IMG] -> blok {block_addr}", flush=True)
+    area = ws.range(block_addr)
+    left, top, area_w, area_h = area.left, area.top, area.width, area.height
+    max_w = max(area_w - 2 * padding, 10)
+    max_h = max(area_h - 2 * padding, 10)
+
+    img_w = img_h = None
+    try:
+        from PIL import Image
+        with Image.open(path) as im:
+            img_w, img_h = im.size
+    except Exception as e:
+        print(f"[IMG] ukuran gambar tidak terbaca ({e}); pakai rasio 4:3", flush=True)
+    if not img_w or not img_h:
+        img_w, img_h = 4, 3
+
+    ratio = min(max_w / img_w, max_h / img_h)
+    w, h = img_w * ratio, img_h * ratio
+    x = left + (area_w - w) / 2
+    y = top + (area_h - h) / 2
+
+    t0 = time.time()
+    # LinkToFile=False, SaveWithDocument=True, Left, Top, Width, Height
+    ws.api.Shapes.AddPicture(path, False, True, x, y, w, h)
+    print(f"[IMG] AddPicture selesai {time.time() - t0:.1f}s ({w:.0f}x{h:.0f}pt)", flush=True)
+    return True
+
+
+def _replace_placeholders(ws, final_type):
+    try:  # native Excel, tanpa loop per sel
+        ws.api.UsedRange.Replace(What="{_alejandro_}", Replacement=final_type, LookAt=2)
+    except Exception as e:
+        print(f"[TH/VH] replace placeholder sel gagal: {e}", flush=True)
+    try:
+        shapes = list(ws.shapes)
+    except Exception:
+        shapes = []
+    for shape in shapes:
+        try:
+            text = getattr(shape, "text", None)
+            if text and "{_alejandro_}" in text:
+                shape.text = text.replace("{_alejandro_}", final_type)
+        except Exception:
+            continue
+
+
+def _verify_th_vh_layout(ws, template_file=None):
+    """
+    Pastikan file template yang dibuka adalah TEMPLATE TH/VH TERBARU.
+    Kalau masih versi lama -> berhenti dengan pesan jelas (bukan hasil salah diam-diam).
+    """
+    problems = []
+    try:
+        if _clean(ws.range("B8").value).upper() != "DEVELOP CODE":
+            problems.append("B8 bukan 'DEVELOP CODE'")
+        if _clean(ws.range("C8").value).upper() != "STYLE NAME":
+            problems.append("C8 bukan 'STYLE NAME'")
+        if not _clean(ws.range("A13").value).lower().startswith("material"):
+            problems.append("A13 bukan 'Material :'")
+        if not _clean(ws.range("A14").value).lower().startswith("lining"):
+            problems.append("A14 bukan 'Lining :'")
+        if str(ws.range("A38").formula).replace(" ", "").upper() != "=D11":
+            problems.append("A38 bukan rumus =D11")
+        if "$A$30:$B$37" not in str(ws.range("A30").merge_area.address):
+            problems.append("blok foto A30:B37 tidak ditemukan")
+    except Exception as e:
+        problems.append(f"gagal membaca template: {e}")
+
+    if template_file:
+        try:
+            ts = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(os.path.getmtime(template_file)))
+            print(f"[TEMPLATE] {template_file} | terakhir diubah {ts}", flush=True)
+        except Exception:
+            pass
+
+    if problems:
+        raise ValueError(
+            "Template yang dibuka BUKAN versi terbaru (" + "; ".join(problems) + "). "
+            "Timpa file di folder po_template dengan template TH/VH terbaru."
+        )
+
+
+def fill_th_vh_template(ws, api_data, datas, prefix, template_file=None):
+    """
+    Isi template PO TH (prefix='TH') atau PO VH (prefix='VH').
+    Error TIDAK ditelan di sini -> naik ke generate_po_excel.
+    """
+    po = datas["po_code"]
+    loc_raw = datas["lokasi"]
+    tag = f"[{prefix}]"
+
+    _verify_th_vh_layout(ws, template_file)
+
+    article = api_data.get("article", {}) or {}
+    materials = api_data.get("materials", []) or []
+    article_candidates = resolve_article_candidates(api_data)
+
+    # ---------------- 1. HEADER ----------------
+    _put(ws, "B2", f": {po}")
+
+    try:
+        ws.range("B4").number_format = "@"  # cegah Excel ubah jadi tanggal
+    except Exception:
+        pass
+    _put(ws, "B4", _colon(api_data.get("date")))
+
+    to_value = _clean(
+        api_data.get("to") or api_data.get("customer") or api_data.get("customer_code")
+    )
+    if to_value:  # kosong -> biarkan default template ": EDE"
+        _put(ws, "B5", f": {to_value}")
+
+    # ---------------- 2. DESCRIPTION / DEVELOP / STYLE ----------------
+    develop_code, style_name = resolve_codes(api_data)
+    description = (
+        _clean(api_data.get("description_name"))
+        or _clean(api_data.get("article_name_vl"))
+        or _clean(api_data.get("article_name_vh"))
+        or style_name
+    )
+    _put(ws, "A11", description)
+    _put(ws, "B11", develop_code)
+    _put(ws, "C11", style_name)
+
+    # ---------------- 3. WARNA / QTY / COST (baris 11-14) ----------------
+    color_rows = build_color_rows(article.get("color", []))
+    if len(color_rows) > len(THVH_ITEM_ROWS):
+        print(
+            f"{tag} WARNING PO {po}: {len(color_rows)} warna, template hanya "
+            f"{len(THVH_ITEM_ROWS)} baris -> warna ke-{len(THVH_ITEM_ROWS) + 1} dst TIDAK tampil.",
+            flush=True,
+        )
+    shown = color_rows[: len(THVH_ITEM_ROWS)]
+
+    for row, item in zip(THVH_ITEM_ROWS, shown):
+        _put(ws, f"D{row}", item["color"])
+        _put(ws, f"E{row}", item["qty"])
+        _put(ws, f"F{row}", item["price"])  # G = rumus F*E, tidak disentuh
+        print(
+            f"{tag} row {row} | {item['color']} | qty={item['qty']} | cost={item['price']}",
+            flush=True,
+        )
+
+    for row in THVH_ITEM_ROWS[len(shown):]:  # baris tak terpakai
+        _clear(ws, f"D{row}")
+        _clear(ws, f"E{row}")
+        _put(ws, f"F{row}", 0)
+
+    # E15 & G15 = rumus SUM template -> tidak ditulis
+
+    # ---------------- 4. MATERIAL / LINING (kolom A baris 13-14) ----------------
+    upper = _join_materials(materials, ("upper", "material"))
+    lining = _join_materials(materials, ("lining",))
+    _put(ws, "A13", f"Material : {upper}" if upper else "Material :")
+    _put(ws, "A14", f"Lining : {lining}" if lining else "Lining :")
+
+    # ---------------- 5. DELIVERY DATE (anchor B17) ----------------
+    _put(ws, "B17", api_data.get("delivery_date", ""))
+
+    # ---------------- 6. PLACEHOLDER ----------------
+    _replace_placeholders(ws, f"{prefix}-{loc_raw}")
+
+    # ---------------- 7. FOTO (label warna baris 38 = rumus) ----------------
+    print(f"{tag} mulai proses foto ({len(shown)} warna)", flush=True)
+    photo_index = build_photo_index()
+    for idx, item in enumerate(shown):
+        photo = find_photo(photo_index, article_candidates, item["color"])
+        if not photo:
+            print(
+                f"{tag} foto TIDAK ketemu | kandidat={article_candidates} | warna={item['color']}",
+                flush=True,
+            )
+            continue
+        local_photo = _prepare_local_photo(photo)
+        if not local_photo:
+            print(f"{tag} foto dilewati (tidak bisa disalin) | warna={item['color']}", flush=True)
+            continue
+        try:
+            _insert_fit_picture(ws, local_photo, THVH_PICTURE_BLOCKS[idx])
+            print(f"{tag} foto OK -> {os.path.basename(photo)} @ {THVH_PICTURE_BLOCKS[idx]}", flush=True)
+        except Exception as e:
+            print(f"{tag} gagal insert foto {item['color']}: {e}", flush=True)
+
+    print(f"{tag} SUCCESS | PO={po}", flush=True)
+    return True
+
 
 def fill_template_with_res(po_code, jenis_template, api_data, output_path,datas):
     print(f"[INFO] Proses input {jenis_template} - {po_code}...")
@@ -509,6 +895,7 @@ def fill_template_with_res(po_code, jenis_template, api_data, output_path,datas)
     app = None
     wb = None
     try:
+        print(f"[XL] membuka Excel + template: {template_file}", flush=True)
         app = xw.App(visible=False)
         app.display_alerts = False
         app.screen_updating = False
@@ -924,11 +1311,6 @@ def fill_template_with_res(po_code, jenis_template, api_data, output_path,datas)
 
                 safe_set_cell(ws.range('B19'), api_data.get("delivery_date", ""))
 
-                # range_val = (api_data.get("range", "") or "").strip().upper()
-                # if range_val == "MEN":
-                #     safe_set_cell(ws.range('A54'), "2. MEN SHOES BOX USING WHITE EYELET")
-                # elif range_val == "LADIES":
-                #     safe_set_cell(ws.range('A54'), "2. LADIES SHOES BOX USING BLACK EYELET")
                 safe_set_cell(ws.range('A11'), api_data.get("description_name", ""))
 
                 article = api_data.get("article", {})
@@ -961,21 +1343,10 @@ def fill_template_with_res(po_code, jenis_template, api_data, output_path,datas)
                 size_columns_top = {}
                 api_range = (api_data.get("range") or "").strip().upper()
 
-                # if api_range == 'MEN':
                 sizes = [39, 40, 41, 42, 43, 44, 45, 46]
                 for col, size in zip(['E','F','G', 'H', 'I', 'J', 'K', 'L'], sizes):
                     safe_set_cell(ws.range(f"{col}9"), size)
                     size_columns_top[size] = col
-                    
-                # else:
-                #     # fallback (non RO / non MEN)
-                #     for col in ['E','F','G', 'H', 'I', 'J', 'K']:
-                #         val = ws.range(f"{col}9").value
-                #         if val:
-                #             try:
-                #                 size_columns_top[int(val)] = col
-                #             except:
-                #                 pass
 
                 colors = article.get("color", [])
                 desc_row = 11
@@ -1037,7 +1408,6 @@ def fill_template_with_res(po_code, jenis_template, api_data, output_path,datas)
                     colors,
                     article.get("name", ""),
                     ['A32', 'C32', 'E32', 'G32', 'N32', 'P32'],
-                    #  padding_x=20, padding_y=35
                 )
 
             except Exception as e:
@@ -1091,65 +1461,14 @@ def fill_template_with_res(po_code, jenis_template, api_data, output_path,datas)
                     except:
                         continue   
 
-                insert_images(ws, colors, resolve_article_candidates(api_data), ['A31', 'C31', 'E31', 'G31'], 
-                    # padding_x=20, padding_y=35
-                              )
+                insert_images(ws, colors, resolve_article_candidates(api_data), ['A31', 'C31', 'E31', 'G31'])
             except Exception as e:
                 print(f"Error writing HBL/HBM/EBSM format: {e}")
 
-        # PO EVB VH
+        # PO EVB VH  (template baru -> lihat fill_th_vh_template)
         elif jenis_template == "VBH":
-            print("[INFO] Menulis format template EVB BAG")
-            try:
-                safe_set_cell(ws.range("B2"), f": {po}")
-                safe_set_cell(ws.range("B4"), api_data.get("date", ""))
-                safe_set_cell(ws.range("E3"), f"{ro_na}")
-                safe_set_cell(ws.range("E4"), location)
-                safe_set_cell(ws.range("E5"), api_data.get("seasons", ""))
-                safe_set_cell(ws.range("A11"), api_data.get("description_name", ""))
-                materials = api_data.get("materials", [])
-                for mat in materials:
-                    label = mat.get("label", "").lower()
-                    value = mat.get("value", "")
-                    if "upper" in label:
-                        safe_set_cell(ws.range('A13'), f"Material : {value}")
-                    elif "lining" in label:
-                        safe_set_cell(ws.range('A14'), f"Lining : {value}") 
-
-                article = api_data.get("article", {})
-                safe_set_cell(ws.range('C11'), api_data.get("style_code", "") if (article.get("name", "") or "")[:1].isdigit() else article.get("name", ""))
-                safe_set_cell(ws.range('B11'), article.get("name", "") if (article.get("name", "") or "")[:1].isdigit() else '')
-                safe_set_cell(ws.range("B17"), api_data.get("delivery_date", ""))
-                
-                for idx, color in enumerate(api_data.get("article", {}).get("color", [])):
-                    row = 11 + idx
-                    total_qty = sum(s['qty'] for s in color['sets'])
-                    safe_set_cell(ws.range(f"D{row}"), color['color'])
-                    safe_set_cell(ws.range(f"E{row}"), total_qty)
-                    price = color.get("price", "")
-                    try:
-                        price_value = float(price)
-                        formatted_price = f"$ {price_value:.2f}"
-                    except (ValueError, TypeError):
-                        formatted_price = "$ 0.00"
-                    safe_set_cell(ws.range(f"F{row}"), formatted_price)
-                
-                final_type = f'VH-{loc_raw}' 
-                for cell in ws.used_range:
-                    if cell.value and isinstance(cell.value, str) and "{_alejandro_}" in cell.value:
-                        cell.value = cell.value.replace("{_alejandro_}", final_type)
-
-                for shape in ws.shapes:
-                    try:
-                        if hasattr(shape, "text") and shape.text and "{_alejandro_}" in shape.text:
-                            shape.text = shape.text.replace("{_alejandro_}", final_type)
-                    except:
-                        continue   
-                
-
-                insert_images(ws, api_data["article"]["color"], resolve_article_candidates(api_data), ['A30', 'C30', 'E30', 'G30'])
-            except Exception as e:
-                print(f"Error writing VBH format: {e}")
+            print("[INFO] Menulis format template EVB VH")
+            fill_th_vh_template(ws, api_data, datas, "VH", template_file)
 
         # PO EVB VL
         elif jenis_template == "VBL" and ro_na != 'REPEAT ORDER':
@@ -1205,7 +1524,6 @@ def fill_template_with_res(po_code, jenis_template, api_data, output_path,datas)
                         if cell_letter:
                             col_letter = ws.range((10, col)).get_address().split('$')[1]
                             size_columns[cell_letter.strip().upper()] = col_letter
-                    # print(f'SIZE COLUMN :: {size_columns}')
 
                     # Loop baris data warna
                     size_suffix_list = []
@@ -1219,9 +1537,7 @@ def fill_template_with_res(po_code, jenis_template, api_data, output_path,datas)
                         article_name = article.get("name", "")
                         if article_name and article_name[0].isdigit():
                             article_name = api_data.get("style_code", "")
-                        # print(f'ARTICLE NAME :: {api_data.get("style_code")} - COLOR :: {color_name}')
                         option_id = format_option_id(article_name, color_name)
-                        # print(f'Option ID :: {option_id}')
                         sets_for_option = df_sets[df_sets['OptionID'] == option_id]
 
                         if sets_for_option.empty:
@@ -1479,7 +1795,7 @@ def fill_template_with_res(po_code, jenis_template, api_data, output_path,datas)
                     for col in range(7, 15):  # G=7, N=14
                         cell_letter = ws.range((9, col)).value
                         if not cell_letter: 
-                            cell_letter.merge_area[0, 0].value
+                            cell_letter = ws.range((9, col)).merge_area[0, 0].value
                         if cell_letter:
                             col_letter = ws.range((10, col)).get_address().split('$')[1]
                             size_column[cell_letter.strip().upper()] = col_letter
@@ -1545,56 +1861,21 @@ def fill_template_with_res(po_code, jenis_template, api_data, output_path,datas)
             except Exception as e:
                 print(f"Error writing TL format: {e}")
 
-        # PO TRACCE TH
+        # PO TRACCE TH  (template baru -> lihat fill_th_vh_template)
         elif jenis_template == "TRH":
-            print("[INFO] Menulis format template TRACCE BAGS")
-            try:
-                safe_set_cell(ws.range('B2'), f": {po}")
-                safe_set_cell(ws.range('E4'), ro_na)
-                safe_set_cell(ws.range('E5'), location)
-                safe_set_cell(ws.range('B4'), api_data.get('date', ''))
-                safe_set_cell(ws.range('C11'), api_data.get("article", {}).get("name", ""))
-                safe_set_cell(ws.range('A13'), ", ".join([f"Material : {m['value']}" for m in api_data['materials'] if m['label'] == 'Upper']))
-                safe_set_cell(ws.range('B11'), api_data.get('supplier_code', ''))
-                safe_set_cell(ws.range('B17'), api_data.get('delivery_date', ''))
-                safe_set_cell(ws.range('F11'), api_data.get('range', ''))
-                safe_set_cell(ws.range('A11'), api_data.get('article_name_vl', ''))
-                safe_set_cell(ws.range('E6'), api_data.get('seasons', ''))
-                for idx, color in enumerate(api_data.get("article", {}).get("color", [])):
-                    total_qty = sum(s['qty'] for s in color['sets'])
-                    price_formatted = format_price(color['price'])
-                    safe_set_cell(ws.range(f'E{11 + idx}'), color['color'])
-                    safe_set_cell(ws.range(f'O{11 + idx}'), total_qty)
-                    safe_set_cell(ws.range(f'P{11 + idx}'), price_formatted)
+            print("[INFO] Menulis format template TRACCE TH - NEW TEMPLATE", flush=True)
+            fill_th_vh_template(ws, api_data, datas, "TH", template_file)
 
-                final_type = f'TH-{loc_raw}' 
-                for cell in ws.used_range:
-                    if cell.value and isinstance(cell.value, str) and "{_alejandro_}" in cell.value:
-                        cell.value = cell.value.replace("{_alejandro_}", final_type)
-
-                for shape in ws.shapes:
-                    try:
-                        if hasattr(shape, "text") and shape.text and "{_alejandro_}" in shape.text:
-                            shape.text = shape.text.replace("{_alejandro_}", final_type)
-                    except:
-                        continue   
-
-                insert_images(ws, api_data.get('article', {}).get('color', []), resolve_article_candidates(api_data), ['A29', 'C29', 'E29', 'H29', 'N29'])
-            except Exception as e:
-                print(f"Error writing TH format: {e}")
-
-        else:
-            print(f"[WARNING] Jenis template belum didukung penuh: {jenis_template}")
-            return False
-
-        output_filename = f"PO {po} - {produk} - {datas['ro_na']} - {datas['lokasi']}.xlsx"
-        output_path = os.path.join(output_path, output_filename)
-        wb.save(output_path)
+        # ------------------------------------------------------------------
+        # SIMPAN HASIL  (nama file harus sama dengan yang dicari generate_po_excel)
+        # ------------------------------------------------------------------
+        os.makedirs(output_path, exist_ok=True)
+        output_file = os.path.join(
+            output_path, f"PO {po_code} - {produk} - {ro_na_raw} - {loc_raw}.xlsx"
+        )
+        print(f"[XL] menyimpan: {output_file}", flush=True)
+        wb.save(output_file)
         return True
-
-    except Exception as e:
-        print(f"[ERROR] Gagal memproses file template untuk PO {po_code}: {e}\n")
-        return False
 
     finally:
         # Jangan biarkan EXCEL.EXE tertinggal jika satu PO gagal di tengah proses.
@@ -1672,4 +1953,3 @@ def generate_po_excel(po_code, ref, excel_dir):
         )
 
     return True, output_file, None
-
