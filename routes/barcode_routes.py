@@ -1,5 +1,6 @@
 import os
 import time
+import uuid
 
 from flask import Blueprint, render_template, request, jsonify, send_file, abort
 from werkzeug.utils import secure_filename
@@ -38,7 +39,7 @@ def upload():
         return jsonify({"error": "Format file harus .xls atau .xlsx"}), 400
 
     filename = secure_filename(file.filename)
-    unique_name = f"{int(time.time())}_{filename}"
+    unique_name = f"{int(time.time() * 1000)}_{uuid.uuid4().hex[:8]}_{filename}"
     save_path = os.path.join(Config.UPLOAD_FOLDER, unique_name)
     file.save(save_path)
 

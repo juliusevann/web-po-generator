@@ -25,7 +25,7 @@ template_mapping = {
     "VBH": "PO VH TEMPLATE.xlsx",
     "VBL": "PO VL TEMPLATE.xlsx",
     "EBL_RO" : "RO Template Shoes.xlsx",
-    "EBM_RO" : "RO Template Shoes.xlsx",
+    "EBM_RO" : "RO Template Shoes MEN.xlsx",
     "VBL_RO" : "TEMPLATE RO VBL.xlsx",
     "EBSLS": "PO Belts.xlsx",
     "EBSMS": "PO Belts.xlsx",
@@ -328,45 +328,45 @@ def build_size_qty_map(color_obj):
             result[size] = qty
     return result
 
-def fill_template_with_res(po_code, jenis_template, api_data, output_dir, datas):
+def fill_template_with_res(po_code, jenis_template, api_data, output_path,datas):
     print(f"[INFO] Proses input {jenis_template} - {po_code}...")
 
     is_repeat_order = datas['ro_na'] == 'RO'
 
-    # Jenis yang punya template KHUSUS buat Repeat Order (kode "_RO").
-    # Sisanya (HBL, HBM, EBSL, EBSM, EBSLS, EBSMS, TRH, TRK, TRL, TRM, TRS, VBH, VBS)
-    # pakai template yang sama baik status NA maupun RO.
     JENIS_WITH_RO_TEMPLATE = ["EBL", "EBM", "VBL"]
 
     if is_repeat_order and jenis_template in JENIS_WITH_RO_TEMPLATE:
-        # RO + jenis ini punya template RO sendiri
         template = jenis_template + '_RO'
         jenis_template = jenis_template + '_RO'
     else:
-        # NA, atau RO tapi jenis ini nggak punya template RO terpisah
         template = jenis_template
 
     template_filename = template_mapping.get(template, "")
+    # Backward-compatible fallback: if the new EBM RO template has not yet
+    # been deployed, use the existing legacy file instead of failing the PO.
+    if template == "EBM_RO" and template_filename == "RO Template Shoes MEN.xlsx":
+        preferred = os.path.join(Config.EXCEL_TEMPLATE_FOLDER, template_filename)
+        if not os.path.exists(preferred):
+            legacy = "RO Template Shoes.xlsx"
+            legacy_path = os.path.join(Config.EXCEL_TEMPLATE_FOLDER, legacy)
+            if os.path.exists(legacy_path):
+                template_filename = legacy
     if not template_filename:
-        # Nama file kosong di template_mapping (kategori belum punya file .xlsx)
-        # - kasih pesan jelas, jangan lanjut buka folder sebagai file
         print(f"[ERROR] Kategori '{template}' belum punya nama file template "
               f"di template_mapping (masih kosong) - PO {po_code} di-skip.\n")
         return False
 
     template_file = os.path.join(Config.EXCEL_TEMPLATE_FOLDER, template_filename)
     if not os.path.exists(template_file):
-        msg = f"Template tidak ditemukan: {template_file}"
-        print(f"[ERROR] {msg}\n")
-        return False, None, msg
+        print(f"[ERROR] Template tidak ditemukan untuk jenis: {template_file}\n")
+        return False
 
-    # Office (Excel COM automation) tidak didukung dipakai bersamaan oleh
-    # banyak proses - ambil lock global dulu supaya cuma 1 proses yang
-    # menyentuh Excel di satu waktu (lihat core/com_lock.py untuk detail).
-    from core import com_lock
-    com_lock.acquire()
+    app = None
+    wb = None
     try:
         app = xw.App(visible=False)
+        app.display_alerts = False
+        app.screen_updating = False
         wb = app.books.open(template_file)
         ws = wb.sheets[0]
         ro_na_raw = datas['ro_na']
@@ -388,11 +388,8 @@ def fill_template_with_res(po_code, jenis_template, api_data, output_dir, datas)
                 safe_set_cell(ws.range('B19'), api_data.get("delivery_date", ""))
                 safe_set_cell(ws.range('A11'), api_data.get("description_name", ""))
                 article = api_data.get("article", {})
-                safe_set_cell(ws.range('C11'), api_data.get("style_code", "") if article.get("name", "")[0].isdigit() else article.get("name", ""))
-                safe_set_cell(ws.range('B11'), article.get("name", "") if article.get("name", "")[0].isdigit() else '')
-                # safe_set_cell(ws.range('G11'), api_data.get("range", ""))
-                # safe_set_cell(ws.range('B11'), api_data.get("supplier_code", ""))
-                # safe_set_cell(ws.range('I22'), article.get("name", ""))
+                safe_set_cell(ws.range('C11'), api_data.get("style_code", "") if (article.get("name", "") or "")[:1].isdigit() else article.get("name", ""))
+                safe_set_cell(ws.range('B11'), article.get("name", "") if (article.get("name", "") or "")[:1].isdigit() else '')
                 materials = api_data.get("materials", [])
                 material_row = 13
                 for material in materials:
@@ -446,8 +443,8 @@ def fill_template_with_res(po_code, jenis_template, api_data, output_dir, datas)
                     row = start_row + idx
                     color_name = color_info.get("color", "")
                     sets = color_info.get("sets", [])
+                    # print(f'SET :: {sets}')
                     if color_name and color_name != "-":
-                        # safe_set_cell(ws.range(f"K{row}"), color_name)  
                         for set_info in sets:
                             size = set_info.get("size")
                             qty = set_info.get("qty", 0)
@@ -456,6 +453,7 @@ def fill_template_with_res(po_code, jenis_template, api_data, output_dir, datas)
                             except (ValueError, TypeError):
                                 continue
                             col = size_columns.get(size)
+                            # print(f'COL:ROW :: {col}:{row}')
                             if col:
                                 safe_set_cell(ws.range(f"{col}{row}"), qty)  
 
@@ -480,16 +478,14 @@ def fill_template_with_res(po_code, jenis_template, api_data, output_dir, datas)
                             color_name = "_".join(str(color_name).split())
                         else:
                             continue
-                        # print(f'Colors name :: {color_name}')
 
                         article_name = article.get("name", "")
                         if article_name and article_name[0].isdigit():
                             article_name = api_data.get("style_code", "")
-                        print(f'ARTICLE NAME :: {api_data.get("style_code")} - COLOR :: {color_name}')
+                        # print(f'ARTICLE NAME :: {api_data.get("style_code")} - COLOR :: {color_name}')
                         option_id = format_option_id(article_name, color_name)
-                        print(f'Option ID :: {option_id}')
+                        # print(f'Option ID :: {option_id}')
                         sets_for_option = df_sets[df_sets['OptionID'] == option_id]
-                        # print(f'Sets for option :: {sets_for_option}')
 
                         if sets_for_option.empty:
                             print(f"[INFO] Tidak ada data Sets untuk OptionID: {option_id}") 
@@ -534,7 +530,7 @@ def fill_template_with_res(po_code, jenis_template, api_data, output_dir, datas)
                     except:
                         continue   
                                 
-                insert_images(ws, colors, resolve_article_candidates(api_data), ['A32', 'C32', 'E32', 'G32', 'N32', 'T32'])
+                insert_images(ws, colors, article.get("name", ""), ['A32', 'C32', 'E32', 'G32', 'N32', 'T32'])
 
             except Exception as e:
                 print(f"Error writing EBL/EBM format: {e}")
@@ -550,13 +546,8 @@ def fill_template_with_res(po_code, jenis_template, api_data, output_dir, datas)
                 safe_set_cell(ws.range('A10'), api_data.get("description_name", ""))
 
                 article = api_data.get("article", {})
-                safe_set_cell(ws.range('C10'), api_data.get("style_code", "") if article.get("name", "")[0].isdigit() else article.get("name", ""))
-                safe_set_cell(ws.range('B10'), article.get("name", "") if article.get("name", "")[0].isdigit() else '')
-
-                # article = api_data.get("article", {})
-                # safe_set_cell(ws.range('C10'), api_data.get("style_code", "") if article.get("name", "")[0].isdigit() else article.get("name", ""))
-                # safe_set_cell(ws.range('D10'), article.get("name", "") if article.get("name", "")[0].isdigit() else '')
-                # safe_set_cell(ws.range('B10'), api_data.get("supplier_code", ""))
+                safe_set_cell(ws.range('C10'), api_data.get("style_code", "") if (article.get("name", "") or "")[:1].isdigit() else article.get("name", ""))
+                safe_set_cell(ws.range('B10'), article.get("name", "") if (article.get("name", "") or "")[:1].isdigit() else '')
 
                 materials = api_data.get("materials", [])
                 material_row = 12
@@ -641,36 +632,32 @@ def fill_template_with_res(po_code, jenis_template, api_data, output_dir, datas)
                     except:
                         continue   
                                 
-                insert_images(ws, colors, resolve_article_candidates(api_data), ['A30', 'C30', 'E30', 'H30', 'O30'])
+                insert_images(ws, colors, article.get("name", ""), ['A30', 'C30', 'E30', 'H30', 'O30'])
 
             except Exception as e:
                 print(f"Error writing EBL/EBM format: {e}")
     
-        elif jenis_template in ['EBL_RO','EBM_RO'] and ro_na == 'REPEAT ORDER':
+        elif jenis_template in ['EBL_RO'] and ro_na == 'REPEAT ORDER':
             try:
                 print("[INFO] Menulis format template RO EB SHOES")
-
-
+                
                 safe_set_cell(ws.range('B2'), f": {po}")
                 safe_set_cell(ws.range('B4'), api_data.get("date", ""))
-                # safe_set_cell(ws.range('E4'), ro_na)
                 safe_set_cell(ws.range('E5'), location)
                 safe_set_cell(ws.range('E6'), api_data.get("seasons", ""))
 
                 safe_set_cell(ws.range('B19'), api_data.get("delivery_date", ""))
-                # safe_set_cell(ws.range('G11'), api_data.get("range", ""))
 
-                range_val = (api_data.get("range", "") or "").strip().upper()
-                if range_val == "MEN":
-                    safe_set_cell(ws.range('A54'), "2. MEN SHOES BOX USING WHITE EYELET")
-                elif range_val == "LADIES":
-                    safe_set_cell(ws.range('A54'), "2. LADIES SHOES BOX USING BLACK EYELET")
+                # range_val = (api_data.get("range", "") or "").strip().upper()
+                # if range_val == "MEN":
+                #     safe_set_cell(ws.range('A54'), "2. MEN SHOES BOX USING WHITE EYELET")
+                # elif range_val == "LADIES":
+                #     safe_set_cell(ws.range('A54'), "2. LADIES SHOES BOX USING BLACK EYELET")
                 safe_set_cell(ws.range('A11'), api_data.get("description_name", ""))
 
                 article = api_data.get("article", {})
-                safe_set_cell(ws.range('C11'), api_data.get("style_code", "") if article.get("name", "")[0].isdigit() else article.get("name", ""))
-                safe_set_cell(ws.range('B11'), article.get("name", "") if article.get("name", "")[0].isdigit() else '')
-                
+                safe_set_cell(ws.range('C11'), api_data.get("style_code", "") if (article.get("name", "") or "")[:1].isdigit() else article.get("name", ""))
+                safe_set_cell(ws.range('B11'), article.get("name", "") if (article.get("name", "") or "")[:1].isdigit() else '')
 
                 materials = api_data.get("materials", [])
                 material_row = 13
@@ -683,12 +670,11 @@ def fill_template_with_res(po_code, jenis_template, api_data, output_dir, datas)
                     if material_row > 17:
                         break
 
-
                 api_range = (api_data.get("range") or "").strip().upper()
-                if "MEN" in api_range:
-                    sizes = [39, 40, 41, 42, 43, 44, 45]
-                    for col, size in zip(['G', 'H', 'I', 'J', 'K','L','M'], sizes):
-                        safe_set_cell(ws.range(f"{col}20"), size)
+                # if "MEN" in api_range:
+                #     sizes = [39, 40, 41, 42, 43, 44, 45]
+                #     for col, size in zip(['G', 'H', 'I', 'J', 'K','L','M'], sizes):
+                #         safe_set_cell(ws.range(f"{col}20"), size)
 
                 size_columns_bottom = {}
                 for col in ['G', 'H', 'I', 'J', 'K','L']:
@@ -696,7 +682,6 @@ def fill_template_with_res(po_code, jenis_template, api_data, output_dir, datas)
                     if val:
                         size_columns_bottom[int(val)] = col
 
-  
                 size_columns_top = {}
                 api_range = (api_data.get("range") or "").strip().upper()
 
@@ -716,7 +701,6 @@ def fill_template_with_res(po_code, jenis_template, api_data, output_dir, datas)
                             except:
                                 pass
 
-
                 colors = article.get("color", [])
                 desc_row = 11
 
@@ -735,18 +719,12 @@ def fill_template_with_res(po_code, jenis_template, api_data, output_dir, datas)
                         if desc_row > 17:
                             break
 
-
                 start_row_top = 11      # G11–M
                 start_row_bottom = 21   # J22–P
 
                 for idx, color in enumerate(colors):
                     row_top = start_row_top + idx
                     row_bottom = start_row_bottom + idx
-
-                    # color_name = color.get("color", "")
-                    # if color_name and color_name != "-":
-
-                    #     safe_set_cell(ws.range(f"H{row_bottom}"), color_name)
 
                     sets = color.get("sets", [])
 
@@ -761,7 +739,6 @@ def fill_template_with_res(po_code, jenis_template, api_data, output_dir, datas)
                         if col_top:
                             safe_set_cell(ws.range(f"{col_top}{row_top}"), qty)
 
-                        # tabel bawah
                         col_bottom = size_columns_bottom.get(size)
                         if col_bottom:
                             safe_set_cell(ws.range(f"{col_bottom}{row_bottom}"), qty)
@@ -780,17 +757,147 @@ def fill_template_with_res(po_code, jenis_template, api_data, output_dir, datas)
                     except:
                         pass
 
-
                 insert_images(
                     ws,
                     colors,
-                    resolve_article_candidates(api_data),
+                    article.get("name", ""),
                     ['A32', 'C32', 'E32', 'G32', 'N32', 'P32']
                 )
 
             except Exception as e:
                 print(f"Error writing EBL/EBM RO format: {e}")
 
+        
+        elif jenis_template in ['EBM_RO'] and ro_na == 'REPEAT ORDER':
+            try:
+                print("[INFO] Menulis format template RO EB SHOES MENS")
+                
+                safe_set_cell(ws.range('B2'), f": {po}")
+                safe_set_cell(ws.range('B4'), api_data.get("date", ""))
+                safe_set_cell(ws.range('E5'), location)
+                safe_set_cell(ws.range('E6'), api_data.get("seasons", ""))
+
+                safe_set_cell(ws.range('B19'), api_data.get("delivery_date", ""))
+
+                # range_val = (api_data.get("range", "") or "").strip().upper()
+                # if range_val == "MEN":
+                #     safe_set_cell(ws.range('A54'), "2. MEN SHOES BOX USING WHITE EYELET")
+                # elif range_val == "LADIES":
+                #     safe_set_cell(ws.range('A54'), "2. LADIES SHOES BOX USING BLACK EYELET")
+                safe_set_cell(ws.range('A11'), api_data.get("description_name", ""))
+
+                article = api_data.get("article", {})
+                safe_set_cell(ws.range('C11'), api_data.get("style_code", "") if (article.get("name", "") or "")[:1].isdigit() else article.get("name", ""))
+                safe_set_cell(ws.range('B11'), article.get("name", "") if (article.get("name", "") or "")[:1].isdigit() else '')
+
+                materials = api_data.get("materials", [])
+                material_row = 13
+                for material in materials:
+                    label = material.get("label", "").strip()
+                    value = material.get("value", "").strip()
+                    if label and value:
+                        safe_set_cell(ws.range(f"A{material_row}"), f"{label} : {value}")
+                        material_row += 1
+                    if material_row > 17:
+                        break
+
+                api_range = (api_data.get("range") or "").strip().upper()
+                if "MEN" in api_range:
+                    sizes = [39, 40, 41, 42, 43, 44, 45, 46]
+                    for col, size in zip(['G', 'H', 'I', 'J', 'K','L','M','N'], sizes):
+                        safe_set_cell(ws.range(f"{col}20"), size)
+
+                size_columns_bottom = {}
+                for col in ['G', 'H', 'I', 'J', 'K','L','M','N']:
+                    val = ws.range(f"{col}20").value
+                    if val:
+                        size_columns_bottom[int(val)] = col
+
+                size_columns_top = {}
+                api_range = (api_data.get("range") or "").strip().upper()
+
+                # if api_range == 'MEN':
+                sizes = [39, 40, 41, 42, 43, 44, 45, 46]
+                for col, size in zip(['E','F','G', 'H', 'I', 'J', 'K', 'L'], sizes):
+                    safe_set_cell(ws.range(f"{col}9"), size)
+                    size_columns_top[size] = col
+                    
+                # else:
+                #     # fallback (non RO / non MEN)
+                #     for col in ['E','F','G', 'H', 'I', 'J', 'K']:
+                #         val = ws.range(f"{col}9").value
+                #         if val:
+                #             try:
+                #                 size_columns_top[int(val)] = col
+                #             except:
+                #                 pass
+
+                colors = article.get("color", [])
+                desc_row = 11
+
+                for color in colors:
+                    color_name = color.get("color", "")
+                    if color_name and color_name != "-":
+                        safe_set_cell(ws.range(f"D{desc_row}"), color_name)
+
+                        try:
+                            price = float(color.get("price", 0))
+                            safe_set_cell(ws.range(f"O{desc_row}"), f"$ {price:.2f}")
+                        except:
+                            safe_set_cell(ws.range(f"O{desc_row}"), "$ 0.00")
+
+                        desc_row += 1
+                        if desc_row > 17:
+                            break
+
+                start_row_top = 11      # G11–M
+                start_row_bottom = 21   # J22–P
+
+                for idx, color in enumerate(colors):
+                    row_top = start_row_top + idx
+                    row_bottom = start_row_bottom + idx
+
+                    sets = color.get("sets", [])
+
+                    for set_info in sets:
+                        try:
+                            size = int(set_info.get("size"))
+                            qty = set_info.get("qty")
+                        except (ValueError, TypeError):
+                            continue
+
+                        col_top = size_columns_top.get(size)
+                        if col_top:
+                            safe_set_cell(ws.range(f"{col_top}{row_top}"), qty)
+
+                        col_bottom = size_columns_bottom.get(size)
+                        if col_bottom:
+                            safe_set_cell(ws.range(f"{col_bottom}{row_bottom}"), qty)
+
+                final_type = f"EM-{loc_raw}"
+
+                for cell in ws.used_range:
+                    if isinstance(cell.value, str) and "{_alejandro_}" in cell.value:
+                        cell.value = cell.value.replace("{_alejandro_}", final_type)
+
+                for shape in ws.shapes:
+                    try:
+                        if hasattr(shape, "text") and shape.text and "{_alejandro_}" in shape.text:
+                            shape.text = shape.text.replace("{_alejandro_}", final_type)
+                    except:
+                        pass
+
+                insert_images(
+                    ws,
+                    colors,
+                    article.get("name", ""),
+                    ['A32', 'C32', 'E32', 'G32', 'N32', 'P32'],
+                    #  padding_x=20, padding_y=35
+                )
+
+            except Exception as e:
+                print(f"Error writing EBL/EBM RO format: {e}")
+        
         #PO EB BAGS
         elif jenis_template in ["HBL", "HBM", "EBSM", "EBSL"]: 
             try:
@@ -800,8 +907,6 @@ def fill_template_with_res(po_code, jenis_template, api_data, output_dir, datas)
                 safe_set_cell(ws.range("B4"), api_data.get("date", ""))
                 safe_set_cell(ws.range("A10"), api_data.get("description_name", ""))
                 safe_set_cell(ws.range('C10'), api_data.get("style_code", ""))
-                # safe_set_cell(ws.range("B10"), api_data.get("supplier_code", ""))
-                # safe_set_cell(ws.range("C10"), api_data.get("article", {}).get("name", ""))
                 safe_set_cell(ws.range("B18"), api_data.get("delivery_date", ""))
                 safe_set_cell(ws.range("E5"), api_data.get("seasons", ""))
                 article = api_data.get("article", {})
@@ -841,7 +946,9 @@ def fill_template_with_res(po_code, jenis_template, api_data, output_dir, datas)
                     except:
                         continue   
 
-                insert_images(ws, colors, resolve_article_candidates(api_data), ['A31', 'C31', 'E31', 'G31'])
+                insert_images(ws, colors, api_data.get("article", {}).get("name", ""), ['A31', 'C31', 'E31', 'G31'], 
+                    # padding_x=20, padding_y=35
+                              )
             except Exception as e:
                 print(f"Error writing HBL/HBM/EBSM format: {e}")
 
@@ -864,15 +971,12 @@ def fill_template_with_res(po_code, jenis_template, api_data, output_dir, datas)
                     elif "lining" in label:
                         safe_set_cell(ws.range('A14'), f"Lining : {value}") 
 
-                # safe_set_cell(ws.range("A13"), ", ".join(
-                #     [f"Material : {m['value']}" for m in api_data['materials'] if m['label'] == 'Upper']
-                # ))
                 article = api_data.get("article", {})
-                safe_set_cell(ws.range('C11'), api_data.get("style_code", "") if article.get("name", "")[0].isdigit() else article.get("name", ""))
-                safe_set_cell(ws.range('B11'), article.get("name", "") if article.get("name", "")[0].isdigit() else '')
+                safe_set_cell(ws.range('C11'), api_data.get("style_code", "") if (article.get("name", "") or "")[:1].isdigit() else article.get("name", ""))
+                safe_set_cell(ws.range('B11'), article.get("name", "") if (article.get("name", "") or "")[:1].isdigit() else '')
                 safe_set_cell(ws.range("B17"), api_data.get("delivery_date", ""))
                 
-                for idx, color in enumerate(api_data.get("article", {}).get("color", "")):
+                for idx, color in enumerate(api_data.get("article", {}).get("color", [])):
                     row = 11 + idx
                     total_qty = sum(s['qty'] for s in color['sets'])
                     safe_set_cell(ws.range(f"D{row}"), color['color'])
@@ -898,7 +1002,7 @@ def fill_template_with_res(po_code, jenis_template, api_data, output_dir, datas)
                         continue   
                 
 
-                insert_images(ws, api_data["article"]["color"], resolve_article_candidates(api_data), ['A30', 'C30', 'E30', 'G30'])
+                insert_images(ws, api_data["article"]["color"], api_data["article"]["name"], ['A30', 'C30', 'E30', 'G30'])
             except Exception as e:
                 print(f"Error writing VBH format: {e}")
 
@@ -912,12 +1016,12 @@ def fill_template_with_res(po_code, jenis_template, api_data, output_dir, datas)
                 safe_set_cell(ws.range('L5'), location)
                 safe_set_cell(ws.range('A11'), api_data.get("description_name", ""))
                 article = api_data.get("article", {})
-                safe_set_cell(ws.range('C11'), api_data.get("style_code", "") if article.get("name", "")[0].isdigit() else article.get("name", ""))
-                safe_set_cell(ws.range('B11'), article.get("name", "") if article.get("name", "")[0].isdigit() else '')
+                safe_set_cell(ws.range('C11'), api_data.get("style_code", "") if (article.get("name", "") or "")[:1].isdigit() else article.get("name", ""))
+                safe_set_cell(ws.range('B11'), article.get("name", "") if (article.get("name", "") or "")[:1].isdigit() else '')
             
                 size_col = {}
-                for col in range(22, 28):  # U sampai AA
-                    size_val = ws.range((22, col)).value
+                for col in range(20, 27):  # T sampai Z
+                    size_val = ws.range((22, col)).value #tempat value
                     if size_val is not None:
                         try:
                             size_col[int(size_val)] = ws.range((22, col)).get_address().split('$')[1]
@@ -955,14 +1059,14 @@ def fill_template_with_res(po_code, jenis_template, api_data, output_dir, datas)
                     df_sets = get_grouped_po_data(location_db)
                     size_columns = {}
                     
-                    for col in range(5, 24):  # G=7, Y=25
+                    for col in range(6, 25):  # F=6, X=24
                         cell_letter = ws.range((9, col)).value
                         if not cell_letter: 
                             cell_letter = ws.range((9, col)).merge_area[0, 0].value
                         if cell_letter:
                             col_letter = ws.range((10, col)).get_address().split('$')[1]
                             size_columns[cell_letter.strip().upper()] = col_letter
-                    print(f'SIZE COLUMN :: {size_columns}')
+                    # print(f'SIZE COLUMN :: {size_columns}')
 
                     # Loop baris data warna
                     size_suffix_list = []
@@ -972,28 +1076,24 @@ def fill_template_with_res(po_code, jenis_template, api_data, output_dir, datas)
                             color_name = "_".join(str(color_name).split())
                         else:
                             continue
-                        # print(f'Colors name :: {color_name}')
 
                         article_name = article.get("name", "")
                         if article_name and article_name[0].isdigit():
                             article_name = api_data.get("style_code", "")
-                        print(f'ARTICLE NAME :: {api_data.get("style_code")} - COLOR :: {color_name}')
+                        # print(f'ARTICLE NAME :: {api_data.get("style_code")} - COLOR :: {color_name}')
                         option_id = format_option_id(article_name, color_name)
-                        print(f'Option ID :: {option_id}')
+                        # print(f'Option ID :: {option_id}')
                         sets_for_option = df_sets[df_sets['OptionID'] == option_id]
-                        # print(f'Sets for option :: {sets_for_option}')
 
                         if sets_for_option.empty:
                             print(f"[INFO] Tidak ada data Sets untuk OptionID: {option_id}") 
-                            # for size_code, col_letter in size_columns.items():
-                            #     ws.range(f"{col_letter}{row}").value = "0"
                             continue
  
                         size_data = {}
                         for _, row_set in sets_for_option.iterrows():
                             size_pack_name = row_set['SizePackName']
                             num_of_pack = row_set['NumofSizePack']
-                            size_code = extract_tracee_size_from_name(size_pack_name).upper() 
+                            size_code = extract_size_from_name(size_pack_name).upper() 
 
                             if len(size_code) >= 2:
                                 suffix = size_code[-1]
@@ -1027,7 +1127,7 @@ def fill_template_with_res(po_code, jenis_template, api_data, output_dir, datas)
                     except:
                         continue     
                 
-                insert_images(ws, api_data['article']['color'], resolve_article_candidates(api_data), ['A33', 'E33', 'N33', 'W33'])
+                insert_images(ws, api_data.get('article', {}).get('color', []), resolve_article_candidates(api_data), ['A33', 'E33', 'N33', 'W33'])
             except Exception as e:
                 print(f"Error writing VBL format: {e}")
 
@@ -1035,159 +1135,76 @@ def fill_template_with_res(po_code, jenis_template, api_data, output_dir, datas)
         elif jenis_template == "VBL_RO" and ro_na == 'REPEAT ORDER':
             print("[INFO] Menulis format template RO EVB SHOES")
             try:
+                article = api_data.get("article", {})
                 safe_set_cell(ws.range('B2'), f": {po}")
                 safe_set_cell(ws.range('B4'), api_data.get('date', ''))
-                safe_set_cell(ws.range('L5'), location)
-                safe_set_cell(ws.range('L4'), api_data.get('seasons', ''))
+                safe_set_cell(ws.range('G4'), api_data.get('seasons', ''))
+                safe_set_cell(ws.range('G5'), location)
                 safe_set_cell(ws.range('A11'), api_data.get("description_name", ""))
-                safe_set_cell(ws.range('E11'), api_data.get("style_code", ""))
-                article = api_data.get("article", {})
-                safe_set_cell(ws.range('D11'), article.get("name", ""))
-
-                size_col = {}
-
-                for col in range(21, 28):  # U sampai AA
-                    size_val = ws.range((24, col)).value
-                    if size_val is not None:
-                        size_col[int(size_val)] = ws.range((24, col)).get_address().split('$')[1]
-
-                print('Size col :: ',size_col)
+                safe_set_cell(ws.range('C11'), api_data.get("style_code", "") if (article.get("name", "") or "")[:1].isdigit() else article.get("name", ""))
+                safe_set_cell(ws.range('B11'), article.get("name", "") if (article.get("name", "") or "")[:1].isdigit() else '')
 
                 materials = api_data.get("materials", [])
                 material_row = 13
                 for material in materials:
                     label = material.get("label", "").strip()
                     value = material.get("value", "").strip()
-                    safe_set_cell(ws.range(f"A{material_row}"), f"{label} : {value}") 
+                    safe_set_cell(ws.range(f"A{material_row}"), f"{label} : {value}")
                     material_row += 1
                     if material_row > 17:
                         break
-                safe_set_cell(ws.range('D19'), api_data.get('delivery_date', ''))
-                for idx, color in enumerate(api_data.get("article", {}).get("color", "")):
-                    row_main = 11 + idx
-                    row_detail = 23 + idx
+                safe_set_cell(ws.range('B19'), api_data.get('delivery_date', ''))
 
-                    safe_set_cell(ws.range(f"F{row_main}"), color['color'])
-                    safe_set_cell(ws.range(f"R{row_main}"), format_price(color['price']))
-                    for s in color['sets']:
-                        size = int(s['size'])
-                        qty = int(s['qty'])
-
-                        col_letter = size_col.get(size)
-                        if col_letter:
-                            safe_set_cell(ws.range(f"{col_letter}{row_detail}"), qty)
+                # Header ukuran (35..41) ada di BARIS 22, kolom I(9) s.d. O(15)
                 size_col_map = {}
-                for col in range(9, 16):
-                    header_val = ws.range((9, col)).value 
+                for col in range(9, 16):        # I=9 ... O=15
+                    header_val = ws.range((22, col)).value
                     size_key = normalize_size(header_val)
-
                     if size_key:
                         size_col_map[size_key] = col
 
-                print("SIZE → COLUMN MAP:", size_col_map)
+                print("SIZE → COLUMN MAP (row 22, I:O):", size_col_map)
 
-                for idx, color in enumerate(api_data.get("article", {}).get("color", [])):
-                    row_main = 11 + idx      # warna di D11
+                for idx, color in enumerate(article.get("color", [])):
+                    row_main = 11 + idx      # nama warna ditulis di D11..D14
+                    row_detail = 23 + idx    # qty per size ditulis di I23:O23 dst (G11:M11 otomatis ikut lewat formula)
 
                     color_name = color.get("color", "").strip().upper()
-                    ws.range(f"F{row_main}").value = color_name
+                    if not color_name or color_name == "-":
+                        continue
+
+                    safe_set_cell(ws.range(f"D{row_main}"), color_name)
+                    safe_set_cell(ws.range(f"P{row_main}"), format_price(color.get('price', '')))
 
                     size_qty_map = build_size_qty_map(color)
 
-                    for col in range(7, 14):
-                        ws.range((row_main, col)).value = "-"
+                    # kosongkan dulu placeholder di baris detail
+                    for col in range(9, 16):
+                        ws.range((row_detail, col)).value = "-"
 
                     for size_key, qty in size_qty_map.items():
                         col = size_col_map.get(size_key)
                         if col:
-                            cell = ws.range((row_main, col))
-                            if cell.merge_cells:
-                                cell.merge_area[0, 0].value = qty
-                            else:
-                                cell.value = qty
+                            ws.range((row_detail, col)).value = qty
 
-
-                    for col in range(11, 18):  # J=10, P=16
-                        size_header = ws.range((18, col)).value
-                        if not size_header:
-                            ws.range((row_detail, col)).value = "-"
-                            continue
-
-                        size_key = str(size_header).strip()
-                        ws.range((row_detail, col)).value = size_qty_map.get(size_key, "-")
-                            
-                location_db = "CWH" if loc_raw == "JKT" else "WMKR"
-                if ro_na_raw == "RO":
-                    df_sets = get_grouped_po_data(location_db)
-                    size_column = {}
-                    
-                    # for col in range(7, 13):  # G=7, N=14
-                    #     cell_letter = ws.range((9, col)).value
-                    #     if not cell_letter: 
-                    #         cell_letter.merge_area[0, 0].value
-                    #     if cell_letter:
-                    #         col_letter = ws.range((10, col)).get_address().split('$')[1]
-                    #         size_column[cell_letter.strip().upper()] = col_letter
-
-                    # Loop baris data warna
-                    # size_suffix_list = []
-                    # for row in range(10, 17):   
-                    #     color_name = ws.range(f"D{row}").value
-                    #     if not color_name:
-                    #         continue
-
-                    #     option_id = format_option_id(api_data.get("article", {}).get("name", ""), color_name)
-                    #     sets_for_option = df_sets[df_sets['OptionID'] == option_id]
-
-                    #     # if sets_for_option.empty:
-                    #     #     print(f"[INFO] Tidak ada data Sets untuk OptionID: {option_id}") 
-                    #     #     for size_code, col_letter in size_column.items():
-                    #     #         ws.range(f"{col_letter}{row}").value = "-"
-                    #     #     continue
- 
-                    #     size_data = {}
-                    #     for _, row_set in sets_for_option.iterrows():
-                    #         size_pack_name = row_set['SizePackName']
-                    #         num_of_pack = row_set['NumofSizePack']
-                    #         size_code = extract_tracee_size_from_name(size_pack_name).upper() 
-                    #         print('Size code :: ',size_code)
-
-                    #         if len(size_code) >= 2:
-                    #             suffix = size_code[-1]
-                    #             if suffix not in size_suffix_list:
-                    #                 size_suffix_list.append(suffix)
-
-                    #         size_data[size_code] = num_of_pack
-                
-                    #     for size_code, col_letter in size_column.items():
-                    #         value = size_data.get(size_code, "-")
-                    #         if not value or pd.isna(value):
-                    #             value = "-"
-                    #         ws.range(f"{col_letter}{row}").value = value
-
-                 
                 final_type = f'VL-{loc_raw}'
                 for row in ws.used_range:
                     for cell in row:
                         if cell.value and isinstance(cell.value, str):
-                            # if "{_sets_}" in cell.value:
-                            #     cell.value = cell.value.replace("{_sets_}", "A/B/C/D/E/F/G/H")
                             if "{_alejandro_}" in cell.value:
                                 cell.value = cell.value.replace("{_alejandro_}", final_type)
 
                 for shape in ws.shapes:
                     try:
-                        # if hasattr(shape, "text") and shape.text and "{_sets_}" in shape.text:
-                        #     shape.text = shape.text.replace("{_sets_}", "A/B/C/D/E/F/G/H")
                         if hasattr(shape, "text") and shape.text and "{_alejandro_}" in shape.text:
                             shape.text = shape.text.replace("{_alejandro_}", final_type)
                     except:
-                        continue     
-                
-                insert_images(ws, api_data['article']['color'], resolve_article_candidates(api_data), ['A32', 'E32', 'J32', 'P32'])
+                        continue
+
+                insert_images(ws, article.get('color', []), article.get('name', ''), ['A33', 'D33', 'L33', 'R33'])
             except Exception as e:
                 print(f"Error writing RO VBL format: {e}")
-
+                
         # PO TRACCE TK
         elif jenis_template == "TRK":
             print("[INFO] Menulis format template TRACCE KIDS")
@@ -1206,7 +1223,7 @@ def fill_template_with_res(po_code, jenis_template, api_data, output_dir, datas)
                 safe_set_cell(ws.range('B11'), api_data.get('supplier_code', ''))
                 safe_set_cell(ws.range('B17'), api_data.get('delivery_date', ''))
                 safe_set_cell(ws.range('E5'), api_data.get('seasons', ''))
-                for idx, color in enumerate(api_data.get("article", {}).get("color", "")):
+                for idx, color in enumerate(api_data.get("article", {}).get("color", [])):
                     total_qty = sum(s['qty'] for s in color['sets'])
                     price_formatted = format_price(color['price'])
                     safe_set_cell(ws.range(f'D{11 + idx}'), color['color'])
@@ -1223,10 +1240,7 @@ def fill_template_with_res(po_code, jenis_template, api_data, output_dir, datas)
                             continue
 
                 final_type = f'TK-{loc_raw}'
-                # size_suffix_list sebelumnya TIDAK PERNAH diisi di blok TK ini
-                # (beda dari EBL/EBM/VBL yang punya logic pengisi) - ini logic
-                # BARU ditulis via analogi ke pola blok EBL/EBM. TOLONG DITES
-                # ke PO asli untuk pastikan hasilnya benar sebelum dipakai produksi.
+
                 location_db = "CWH" if loc_raw == "JKT" else "WMKR"
                 size_suffix_list = []
                 if ro_na_raw == "NA" or ro_na_raw == "RO":
@@ -1234,7 +1248,7 @@ def fill_template_with_res(po_code, jenis_template, api_data, output_dir, datas)
                     article_name = api_data.get("article", {}).get("name", "")
                     if article_name and article_name[0].isdigit():
                         article_name = api_data.get("style_code", "")
-                    for color in api_data.get("article", {}).get("color", ""):
+                    for color in api_data.get("article", {}).get("color", []):
                         color_name = color.get("color", "")
                         if not color_name or color_name == "-":
                             continue
@@ -1263,7 +1277,7 @@ def fill_template_with_res(po_code, jenis_template, api_data, output_dir, datas)
                     except:
                         continue   
 
-                insert_images(ws, api_data.get("article", {}).get("color", ""), resolve_article_candidates(api_data), ['A29', 'B29', 'D29', 'F29'])
+                insert_images(ws, api_data.get("article", {}).get("color", []), api_data.get("article", {}).get("name", ""), ['A29', 'B29', 'D29', 'F29'])
             except Exception as e:
                 print(f"Error writing TK format: {e}")
 
@@ -1302,7 +1316,7 @@ def fill_template_with_res(po_code, jenis_template, api_data, output_dir, datas)
                         except:
                             continue
 
-                for idx, color in enumerate(api_data.get("article", {}).get("color", "")): 
+                for idx, color in enumerate(api_data.get("article", {}).get("color", [])): 
                     price_formatted = format_price(color['price']) 
                     safe_set_cell(ws.range(f'D{11 + idx}'), color['color'])
                     safe_set_cell(ws.range(f'Q{11 + idx}'), price_formatted)
@@ -1387,7 +1401,7 @@ def fill_template_with_res(po_code, jenis_template, api_data, output_dir, datas)
                     except:
                         continue     
                 
-                insert_images(ws, api_data['article']['color'], resolve_article_candidates(api_data), ['A28', 'C28', 'F28', 'L28'])
+                insert_images(ws, api_data.get('article', {}).get('color', []), resolve_article_candidates(api_data), ['A28', 'C28', 'F28', 'L28'])
 
             except Exception as e:
                 print(f"Error writing TL format: {e}")
@@ -1407,7 +1421,7 @@ def fill_template_with_res(po_code, jenis_template, api_data, output_dir, datas)
                 safe_set_cell(ws.range('F11'), api_data.get('range', ''))
                 safe_set_cell(ws.range('A11'), api_data.get('article_name_vl', ''))
                 safe_set_cell(ws.range('E6'), api_data.get('seasons', ''))
-                for idx, color in enumerate(api_data.get("article", {}).get("color", "")):
+                for idx, color in enumerate(api_data.get("article", {}).get("color", [])):
                     total_qty = sum(s['qty'] for s in color['sets'])
                     price_formatted = format_price(color['price'])
                     safe_set_cell(ws.range(f'E{11 + idx}'), color['color'])
@@ -1426,36 +1440,48 @@ def fill_template_with_res(po_code, jenis_template, api_data, output_dir, datas)
                     except:
                         continue   
 
-                insert_images(ws, api_data['article']['color'], resolve_article_candidates(api_data), ['A29', 'C29', 'E29', 'H29', 'N29'])
+                insert_images(ws, api_data.get('article', {}).get('color', []), resolve_article_candidates(api_data), ['A29', 'C29', 'E29', 'H29', 'N29'])
             except Exception as e:
                 print(f"Error writing TH format: {e}")
 
         else:
-            msg = f"Jenis template belum didukung penuh: {jenis_template}"
-            print(f"[WARNING] {msg}")
-            return False, None, msg
+            print(f"[WARNING] Jenis template belum didukung penuh: {jenis_template}")
+            return False
 
         output_filename = f"PO {po} - {produk} - {datas['ro_na']} - {datas['lokasi']}.xlsx"
-        output_path = os.path.join(output_dir, output_filename)
+        output_path = os.path.join(output_path, output_filename)
         wb.save(output_path)
-        wb.close()
-        app.quit()
-        return True, output_path, None
+        return True
 
     except Exception as e:
-        msg = f"Gagal memproses file template untuk PO {po_code}: {e}"
-        print(f"[ERROR] {msg}\n")
-        return False, None, msg
+        print(f"[ERROR] Gagal memproses file template untuk PO {po_code}: {e}\n")
+        return False
 
     finally:
-        com_lock.release()
+        # Jangan biarkan EXCEL.EXE tertinggal jika satu PO gagal di tengah proses.
+        try:
+            if wb is not None:
+                wb.close()
+        except Exception:
+            pass
+        try:
+            if app is not None:
+                app.quit()
+        except Exception:
+            pass
 
 
 
 def generate_po_excel(po_code, ref, excel_dir):
     """
     Entry point yang dipanggil job_manager.py.
-    Return (ok: bool, path: str|None, err: str|None).
+
+    IMPORTANT:
+    job_manager.py mengharapkan return:
+        (excel_ok, excel_path, excel_err)
+
+    fill_template_with_res() sendiri mengembalikan bool, jadi jangan
+    return langsung dari fungsi ini.
     """
     try:
         jenis_combo, produk, ro_na, lokasi = parse_ref(ref)
@@ -1475,9 +1501,43 @@ def generate_po_excel(po_code, ref, excel_dir):
         "lokasi": lokasi,
     }
 
-    api_data = get_po_data_from_api(lokasi, po_code)
+    try:
+        api_data = get_po_data_from_api(lokasi, po_code)
+    except Exception as e:
+        return False, None, f"Gagal mengambil data API untuk PO {po_code}: {e}"
+
     if api_data is None:
         return False, None, f"Gagal ambil data dari API untuk PO {po_code}"
 
     os.makedirs(excel_dir, exist_ok=True)
-    return fill_template_with_res(po_code, jenis, api_data, excel_dir, datas)
+
+    try:
+        ok = fill_template_with_res(
+            po_code,
+            jenis,
+            api_data,
+            excel_dir,
+            datas,
+        )
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return False, None, f"Gagal generate Excel PO {po_code}: {e}"
+
+    if not ok:
+        return False, None, f"Gagal generate Excel PO {po_code}"
+
+    output_filename = (
+        f"PO {po_code} - {produk} - {ro_na} - {lokasi}.xlsx"
+    )
+    output_file = os.path.join(excel_dir, output_filename)
+
+    if not os.path.exists(output_file):
+        return (
+            False,
+            None,
+            f"Generator mengembalikan sukses tetapi file tidak ditemukan: "
+            f"{output_file}",
+        )
+
+    return True, output_file, None
