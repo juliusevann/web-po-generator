@@ -199,42 +199,125 @@ def build_photo_index():
     print(f"[IMG] Index foto dibangun: {len(index)} foto ditemukan di '{Config.IMAGE_FOLDER}' (termasuk subfolder)")
     return index
 
-def resolve_article_candidates(api_data):
-    """
-    Penamaan foto di SAMPLE PHOTO TIDAK KONSISTEN - sebagian produk pakai
-    kode angka mentah (misal '263EB188' untuk SILENZIO), sebagian pakai nama
-    produk (misal 'IYAREN'). Karena itu, kembalikan KEDUA kandidat identitas
-    artikel (article.name DAN style_code), supaya insert_images() bisa coba
-    keduanya - bukan pilih satu dan berharap benar.
-    """
-    article = api_data.get("article", {})
-    name = article.get("name", "")
-    style_code = api_data.get("style_code", "")
+def _is_probable_article_code(value):
+    """Return True for product/style codes commonly used in SAMPLE PHOTO filenames.
 
+    Example: 271VB003, 263EB435, 271TR012.
+    We intentionally require both digits and letters so normal names such as
+    AVENIA are not treated as codes.
+    """
+    if value is None:
+        return False
+    text = str(value).strip().upper()
+    if not text or len(text) < 5 or len(text) > 30:
+        return False
+    compact = normalize(text)
+    return (
+        len(compact) >= 5
+        and any(ch.isdigit() for ch in compact)
+        and any(ch.isalpha() for ch in compact)
+        and bool(re.match(r"^\d+[A-Z]+\d+[A-Z0-9]*$", compact))
+    )
+
+
+def _collect_article_codes(value, result=None):
+    """Recursively collect likely article/style codes from API response."""
+    if result is None:
+        result = []
+
+    if isinstance(value, dict):
+        # Prefer fields that are semantically likely to contain article/style codes.
+        preferred_keys = (
+            "style_code", "styleCode", "article_code", "articleCode",
+            "option_id", "optionId", "optionID", "article_id", "articleId",
+            "article_name_vl", "article_name_vh", "article_name",
+        )
+        for key in preferred_keys:
+            if key in value:
+                item = value.get(key)
+                if _is_probable_article_code(item):
+                    item = str(item).strip()
+                    if item not in result:
+                        result.append(item)
+
+        for item in value.values():
+            _collect_article_codes(item, result)
+
+    elif isinstance(value, (list, tuple)):
+        for item in value:
+            _collect_article_codes(item, result)
+
+    elif isinstance(value, str) and _is_probable_article_code(value):
+        item = value.strip()
+        if item not in result:
+            result.append(item)
+
+    return result
+
+
+def resolve_article_candidates(api_data):
+    """Build all useful identities for locating SAMPLE PHOTO files.
+
+    The API may return the commercial article name (e.g. ``AVENIA``), while
+    SAMPLE PHOTO filenames may use the internal article/style code
+    (e.g. ``271VB003_CHALKBEIGE.png``).  Therefore photo lookup must NOT rely
+    only on ``article.name``.
+
+    Candidate order:
+      1. article.name
+      2. explicit style/article/option code fields
+      3. article_name_vl / article_name_vh
+      4. other code-like values found recursively in the API response
+    """
+    article = api_data.get("article", {}) or {}
     candidates = []
-    if name:
-        candidates.append(name)
-    if style_code and style_code not in candidates:
-        candidates.append(style_code)
+
+    def add(value):
+        if value is None:
+            return
+        text = str(value).strip()
+        if text and text not in candidates:
+            candidates.append(text)
+
+    # Keep the human-readable article name first for backward compatibility.
+    add(article.get("name", ""))
+
+    # Explicit code fields.
+    for key in (
+        "style_code", "styleCode", "article_code", "articleCode",
+        "option_id", "optionId", "optionID", "article_id", "articleId",
+        "article_name_vl", "article_name_vh", "article_name",
+    ):
+        add(api_data.get(key))
+        add(article.get(key))
+
+    # Finally inspect the whole response. This catches cases where the API
+    # nests the code deeper, while AVENIA remains only the display name.
+    for code in _collect_article_codes(api_data):
+        add(code)
+
     return candidates
 
 
-def insert_images(ws, colors, name_candidates, positions):
+def insert_images(ws, colors, name_candidates, positions, color_label_row=37):
     """
-    name_candidates: bisa 1 string (kompatibel dengan pemanggilan lama),
-    atau list beberapa kandidat identitas artikel (article.name & style_code)
-    untuk dicoba satu per satu, karena penamaan foto tidak konsisten.
+    Insert sample photos and write the corresponding color label.
+
+    `positions` are Excel anchors such as A33/E33/N33/W33.
+    `color_label_row` lets each template control where the color label belongs.
     """
     if isinstance(name_candidates, str):
         name_candidates = [name_candidates]
-    article_keys = [normalize(n) for n in name_candidates if n]
 
-    valid_colors = [c for c in colors if c.get("color") not in ["", "-"]]
+    article_keys = [normalize(n) for n in name_candidates if n]
+    valid_colors = [
+        c for c in colors
+        if str(c.get("color", "")).strip() not in ("", "-")
+    ]
 
     photo_index = build_photo_index()
 
     for idx, color in enumerate(valid_colors):
-
         if idx >= len(positions):
             break
 
@@ -253,18 +336,16 @@ def insert_images(ws, colors, name_candidates, positions):
 
         m = re.match(r'^([A-Za-z]+)', position.strip())
         col = m.group(1).upper() if m else None
-        color_cell = f"{col}37" if col else position
+        color_cell = f"{col}{color_label_row}" if col else position
 
         try:
-            ws.range(color_cell).value = raw_color
+            safe_set_cell(ws.range(color_cell), raw_color)
         except Exception as e:
             print(f"[IMG] Error write color '{raw_color}' → {color_cell}: {e}")
 
         if photo_file:
-
             try:
                 cell = ws.range(position)
-
                 ws.pictures.add(
                     photo_file,
                     top=cell.top,
@@ -272,14 +353,78 @@ def insert_images(ws, colors, name_candidates, positions):
                     height=180,
                     width=235
                 )
-
                 print(f"[IMG] OK → {os.path.basename(photo_file)} @ {position}")
-
             except Exception as e:
                 print(f"[IMG] Error insert image '{raw_color}': {e}")
-
         else:
-            print(f"[IMG] NOT FOUND → Article candidates={article_keys}, Color={color_key}")
+            print(
+                f"[IMG] NOT FOUND → Article candidates={article_keys}, "
+                f"Color={color_key}"
+            )
+
+
+def detect_vbl_layout(ws):
+    """
+    Detect the structure of the current PO VL TEMPLATE.xlsx instead of relying
+    on the old hard-coded layout.
+
+    Current template facts:
+      - Confirmed PO sheet
+      - size headers: T22:Z22
+      - quantity detail rows: 23..27
+      - four picture blocks: A33:D42, E33:M42, N33:V42, W33:AC42
+      - color labels: A43, E43, N43, W43
+    """
+    # Size columns are identified from the actual row-22 values.
+    size_columns = {}
+    for col in range(1, ws.used_range.last_cell.column + 1):
+        try:
+            value = ws.range((22, col)).value
+        except Exception:
+            continue
+        size_key = normalize_size(value)
+        if size_key and size_key.isdigit():
+            n = int(size_key)
+            if 30 <= n <= 60:
+                size_columns[n] = ws.range((22, col)).get_address().split("$")[1]
+
+    # Detect large merged picture blocks below the data table.
+    picture_areas = []
+    try:
+        for area in ws.merged_cells.areas:
+            first = area[0, 0]
+            last = area[area.rows.count - 1, area.columns.count - 1]
+            min_row, min_col = first.row, first.column
+            max_row, max_col = last.row, last.column
+            if (
+                min_row >= 30
+                and max_row <= 44
+                and (max_row - min_row) >= 5
+                and (max_col - min_col) >= 2
+            ):
+                picture_areas.append(
+                    (min_col, min_row, first.address)
+                )
+    except Exception:
+        picture_areas = []
+
+    picture_positions = [
+        addr for _, _, addr in sorted(picture_areas)
+    ]
+
+    # Fallback to the known current template layout if Excel's merged-area
+    # enumeration is unavailable.
+    if len(picture_positions) < 4:
+        picture_positions = ["A33", "E33", "N33", "W33"]
+
+    return {
+        "size_columns": size_columns,
+        "picture_positions": picture_positions[:4],
+        "color_label_row": 43,
+        "detail_start_row": 23,
+        "max_colors": 4,
+    }
+
 
 def safe_set_cell(cell, value):
     try:
@@ -530,7 +675,7 @@ def fill_template_with_res(po_code, jenis_template, api_data, output_path,datas)
                     except:
                         continue   
                                 
-                insert_images(ws, colors, article.get("name", ""), ['A32', 'C32', 'E32', 'G32', 'N32', 'T32'])
+                insert_images(ws, colors, resolve_article_candidates(api_data), ['A32', 'C32', 'E32', 'G32', 'N32', 'T32'])
 
             except Exception as e:
                 print(f"Error writing EBL/EBM format: {e}")
@@ -632,7 +777,7 @@ def fill_template_with_res(po_code, jenis_template, api_data, output_path,datas)
                     except:
                         continue   
                                 
-                insert_images(ws, colors, article.get("name", ""), ['A30', 'C30', 'E30', 'H30', 'O30'])
+                insert_images(ws, colors, resolve_article_candidates(api_data), ['A30', 'C30', 'E30', 'H30', 'O30'])
 
             except Exception as e:
                 print(f"Error writing EBL/EBM format: {e}")
@@ -946,7 +1091,7 @@ def fill_template_with_res(po_code, jenis_template, api_data, output_path,datas)
                     except:
                         continue   
 
-                insert_images(ws, colors, api_data.get("article", {}).get("name", ""), ['A31', 'C31', 'E31', 'G31'], 
+                insert_images(ws, colors, resolve_article_candidates(api_data), ['A31', 'C31', 'E31', 'G31'], 
                     # padding_x=20, padding_y=35
                               )
             except Exception as e:
@@ -1002,7 +1147,7 @@ def fill_template_with_res(po_code, jenis_template, api_data, output_path,datas)
                         continue   
                 
 
-                insert_images(ws, api_data["article"]["color"], api_data["article"]["name"], ['A30', 'C30', 'E30', 'G30'])
+                insert_images(ws, api_data["article"]["color"], resolve_article_candidates(api_data), ['A30', 'C30', 'E30', 'G30'])
             except Exception as e:
                 print(f"Error writing VBH format: {e}")
 
@@ -1019,16 +1164,10 @@ def fill_template_with_res(po_code, jenis_template, api_data, output_path,datas)
                 safe_set_cell(ws.range('C11'), api_data.get("style_code", "") if (article.get("name", "") or "")[:1].isdigit() else article.get("name", ""))
                 safe_set_cell(ws.range('B11'), article.get("name", "") if (article.get("name", "") or "")[:1].isdigit() else '')
             
-                size_col = {}
-                for col in range(20, 27):  # T sampai Z
-                    size_val = ws.range((22, col)).value #tempat value
-                    if size_val is not None:
-                        try:
-                            size_col[int(size_val)] = ws.range((22, col)).get_address().split('$')[1]
-                        except (ValueError, TypeError):
-                            pass
-
-                print('size_col =>', size_col)
+                vbl_layout = detect_vbl_layout(ws)
+                size_col = vbl_layout["size_columns"]
+                print("[VBL] Detected size columns:", size_col)
+                print("[VBL] Detected picture positions:", vbl_layout["picture_positions"])
 
                 materials = api_data.get("materials", [])
                 material_row = 13
@@ -1201,7 +1340,7 @@ def fill_template_with_res(po_code, jenis_template, api_data, output_path,datas)
                     except:
                         continue
 
-                insert_images(ws, article.get('color', []), article.get('name', ''), ['A33', 'D33', 'L33', 'R33'])
+                insert_images(ws, article.get('color', []), resolve_article_candidates(api_data), ['A33', 'D33', 'L33', 'R33'])
             except Exception as e:
                 print(f"Error writing RO VBL format: {e}")
                 
@@ -1277,7 +1416,7 @@ def fill_template_with_res(po_code, jenis_template, api_data, output_path,datas)
                     except:
                         continue   
 
-                insert_images(ws, api_data.get("article", {}).get("color", []), api_data.get("article", {}).get("name", ""), ['A29', 'B29', 'D29', 'F29'])
+                insert_images(ws, api_data.get("article", {}).get("color", []), resolve_article_candidates(api_data), ['A29', 'B29', 'D29', 'F29'])
             except Exception as e:
                 print(f"Error writing TK format: {e}")
 
@@ -1474,21 +1613,13 @@ def fill_template_with_res(po_code, jenis_template, api_data, output_path,datas)
 
 def generate_po_excel(po_code, ref, excel_dir):
     """
-    Entry point yang dipanggil job_manager.py.
+    Public entry point used by job_manager.py.
 
-    IMPORTANT:
-    job_manager.py mengharapkan return:
-        (excel_ok, excel_path, excel_err)
-
-    fill_template_with_res() sendiri mengembalikan bool, jadi jangan
-    return langsung dari fungsi ini.
+    Contract:
+        (excel_ok: bool, excel_path: str|None, excel_err: str|None)
     """
     try:
         jenis_combo, produk, ro_na, lokasi = parse_ref(ref)
-    except ValueError as e:
-        return False, None, str(e)
-
-    try:
         jenis = resolve_jenis(jenis_combo)
     except ValueError as e:
         return False, None, str(e)
@@ -1504,6 +1635,8 @@ def generate_po_excel(po_code, ref, excel_dir):
     try:
         api_data = get_po_data_from_api(lokasi, po_code)
     except Exception as e:
+        import traceback
+        traceback.print_exc()
         return False, None, f"Gagal mengambil data API untuk PO {po_code}: {e}"
 
     if api_data is None:
@@ -1527,9 +1660,7 @@ def generate_po_excel(po_code, ref, excel_dir):
     if not ok:
         return False, None, f"Gagal generate Excel PO {po_code}"
 
-    output_filename = (
-        f"PO {po_code} - {produk} - {ro_na} - {lokasi}.xlsx"
-    )
+    output_filename = f"PO {po_code} - {produk} - {ro_na} - {lokasi}.xlsx"
     output_file = os.path.join(excel_dir, output_filename)
 
     if not os.path.exists(output_file):
@@ -1541,3 +1672,4 @@ def generate_po_excel(po_code, ref, excel_dir):
         )
 
     return True, output_file, None
+
