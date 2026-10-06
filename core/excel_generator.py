@@ -152,9 +152,9 @@ def get_grouped_po_data(location):
     return df
 
 def format_option_id(article_name, color_name):
-    name = article_name.strip().replace(" ", "_").upper()
-    # color = color_name.strip().replace(" ", "_").upper()
-    return f"{name}_{color_name}"
+    name = str(article_name or "").strip().replace(" ", "_").upper()
+    color = str(color_name or "").strip().replace(" ", "_").upper()
+    return f"{name}_{color}"
 
 def extract_size_from_name(size_pack_name):
     # Contoh: "EBL EBM - 12C" => "12C"
