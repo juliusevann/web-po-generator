@@ -1537,8 +1537,31 @@ def fill_template_with_res(po_code, jenis_template, api_data, output_path,datas)
                         article_name = article.get("name", "")
                         if article_name and article_name[0].isdigit():
                             article_name = api_data.get("style_code", "")
+                            
+                            
                         option_id = format_option_id(article_name, color_name)
-                        sets_for_option = df_sets[df_sets['OptionID'] == option_id]
+
+                        option_id_norm = normalize(option_id)
+                        
+                        df_sets["_OPTIONID_NORM"] = (
+                            df_sets["OptionID"]
+                            .fillna("")
+                            .astype(str)
+                            .map(normalize)
+                        )
+
+                        sets_for_option = df_sets[
+                            df_sets["_OPTIONID_NORM"] == option_id_norm
+                        ]
+
+                        print(
+                            f"[VBL] article={article_name} | "
+                            f"color={color_name} | "
+                            f"OptionID={option_id} | "
+                            f"matches={len(sets_for_option)}",
+                            flush=True
+                        )
+
 
                         if sets_for_option.empty:
                             print(f"[INFO] Tidak ada data Sets untuk OptionID: {option_id}") 
