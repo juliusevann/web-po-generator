@@ -756,11 +756,16 @@ def _verify_th_vh_layout(ws, template_file=None):
 
 def fill_th_vh_template(ws, api_data, datas, prefix, template_file=None):
     """
-    Isi template PO TH (prefix='TH') atau PO VH (prefix='VH').
-    Error TIDAK ditelan di sini -> naik ke generate_po_excel.
+    Isi template PO TH / VH.
+
+    Mapping EVB:
+        E3 = NA / RO
+        E4 = JAKARTA / MAKASSAR
+        E5 = Seasons dari API
     """
     po = datas["po_code"]
-    loc_raw = datas["lokasi"]
+    loc_raw = str(datas.get("lokasi", "") or "").strip().upper()
+    ro_na_raw = str(datas.get("ro_na", "") or "").strip().upper()
     tag = f"[{prefix}]"
 
     _verify_th_vh_layout(ws, template_file)
@@ -770,28 +775,80 @@ def fill_th_vh_template(ws, api_data, datas, prefix, template_file=None):
     article_candidates = resolve_article_candidates(api_data)
 
     # ---------------- 1. HEADER ----------------
+
     _put(ws, "B2", f": {po}")
 
     try:
-        ws.range("B4").number_format = "@"  # cegah Excel ubah jadi tanggal
+        ws.range("B4").number_format = "@"
     except Exception:
         pass
+
     _put(ws, "B4", _colon(api_data.get("date")))
 
     to_value = _clean(
-        api_data.get("to") or api_data.get("customer") or api_data.get("customer_code")
+        api_data.get("to")
+        or api_data.get("customer")
+        or api_data.get("customer_code")
     )
-    if to_value:  # kosong -> biarkan default template ": EDE"
+
+    if to_value:
         _put(ws, "B5", f": {to_value}")
 
+    ro_na_map = {
+        "NA": "NEW ARRIVAL",
+        "RO": "REPEAT ORDER",
+        "NEW ARRIVAL": "NEW ARRIVAL",
+        "REPEAT ORDER": "REPEAT ORDER",
+    }
+
+    evb_type = ro_na_map.get(
+        ro_na_raw,
+        ro_na_raw
+    )
+
+    location_map = {
+        "JKT": "JAKARTA",
+        "JAKARTA": "JAKARTA",
+        "MKS": "MAKASSAR",
+        "MAKASSAR": "MAKASSAR",
+    }
+
+    evb_location = location_map.get(
+        loc_raw,
+        loc_raw
+    )
+
+    evb_season = _clean(
+        api_data.get("seasons")
+        or api_data.get("season")
+        or ""
+    )
+
+    # Debug supaya kelihatan data yang sebenarnya masuk
+    print(
+        f"{tag} EVB HEADER | "
+        f"E3={evb_type} | "
+        f"E4={evb_location} | "
+        f"E5={evb_season}",
+        flush=True
+    )
+
+    # Tulis langsung ke cell template
+    _put(ws, "E3", evb_type)
+    _put(ws, "E4", evb_location)
+    _put(ws, "E5", evb_season)
+
     # ---------------- 2. DESCRIPTION / DEVELOP / STYLE ----------------
+
     develop_code, style_name = resolve_codes(api_data)
+
     description = (
         _clean(api_data.get("description_name"))
         or _clean(api_data.get("article_name_vl"))
         or _clean(api_data.get("article_name_vh"))
         or style_name
     )
+
     _put(ws, "A11", description)
     _put(ws, "B11", develop_code)
     _put(ws, "C11", style_name)
