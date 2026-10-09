@@ -991,13 +991,13 @@ def fill_template_with_res(po_code, jenis_template, api_data, output_path,datas)
 
                 api_range = (api_data.get("range") or "").strip().upper()
                 if "MEN" in api_range:
-                    sizes = [39, 40, 41, 42, 43, 44, 45,46]
+                    sizes = [39, 40, 41, 42, 43, 44, 45, 46]
                     columns = ['G', 'H', 'I', 'J', 'K','L','M','N']
                     for col, size in zip(columns, sizes):
                         safe_set_cell(ws.range(f"{col}21"), size) 
                         
                 size_columns = {}
-                for col in ['G', 'H', 'I', 'J', 'K','L','M']:
+                for col in ['G', 'H', 'I', 'J', 'K','L','M', 'N']:
                     size_value = ws.range(f"{col}21").value
                     if size_value:
                         size_columns[int(size_value)] = col
