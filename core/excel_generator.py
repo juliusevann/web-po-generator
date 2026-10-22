@@ -996,31 +996,11 @@ def fill_template_with_res(po_code, jenis_template, api_data, output_path,datas)
                     for col, size in zip(columns, sizes):
                         safe_set_cell(ws.range(f"{col}21"), size) 
                         
-                
                 size_columns = {}
-                for col in ['G', 'H', 'I', 'J', 'K', 'L', 'M', 'N']:
+                for col in ['G', 'H', 'I', 'J', 'K','L','M', 'N']:
                     size_value = ws.range(f"{col}21").value
-
-                    if size_value is None or str(size_value).strip() == "":
-                        continue
-
-                    try:
-                        size = int(float(size_value))
-                    except (ValueError, TypeError):
-                        print(
-                            f"[WARNING] Header ukuran dilewati: "
-                            f"{col}21 = {size_value!r}",
-                            flush=True
-                        )
-                        continue
-
-                    size_columns[size] = col
-
-                print(
-                    f"[DEBUG] Size columns EB SHOES: {size_columns}",
-                    flush=True
-                )
-
+                    if size_value:
+                        size_columns[int(size_value)] = col
 
                 colors = article.get("color", []) 
                 desc_row_start = 11
@@ -1069,39 +1049,15 @@ def fill_template_with_res(po_code, jenis_template, api_data, output_path,datas)
                 location_db = "CWH" if loc_raw == "JKT" else "WMKR"
                 if ro_na_raw == "NA" or ro_na_raw == "RO":
                     df_sets = get_grouped_po_data(location_db)
-
                     size_columns = {}
-
-                    for col in range(5, 25):
+                    
+                    for col in range(5, 24):  # G=7, Y=25
                         cell_letter = ws.range((9, col)).value
-
-                        if not cell_letter:
-                            try:
-                                cell_letter = ws.range((9, col)).merge_area[0, 0].value
-                            except Exception:
-                                continue
-
-                        if cell_letter is None:
-                            continue
-
-                        size_code = str(cell_letter).strip().upper()
-
-                        if not size_code or size_code in {"TOTAL", "SETS", "QTY"}:
-                            continue
-
-                        col_letter = (
-                            ws.range((10, col))
-                            .get_address()
-                            .split('$')[1]
-                        )
-
-                        size_columns[size_code] = col_letter
-
-                    print(
-                        f"[DEBUG] Database Sets columns: {size_columns}",
-                        flush=True
-                    )
-
+                        if not cell_letter: 
+                            cell_letter = ws.range((9, col)).merge_area[0, 0].value
+                        if cell_letter:
+                            col_letter = ws.range((10, col)).get_address().split('$')[1]
+                            size_columns[cell_letter.strip().upper()] = col_letter
 
                     # Loop baris data warna
                     size_suffix_list = []
