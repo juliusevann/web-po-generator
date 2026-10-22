@@ -271,3 +271,57 @@ code {
   text-decoration: none;
 }
 .back-link a:hover { color: var(--amber-dark); }
+
+
+/* Corner Sale */
+.cs-info {
+  padding: 16px;
+  margin: 24px 0;
+  background: #fbf3ea;
+  border: 1px solid var(--line);
+  line-height: 1.6;
+  font-size: 13.5px;
+}
+
+.cs-info p {
+  color: var(--ink-soft);
+  overflow-wrap: anywhere;
+}
+
+.cs-error,
+.cs-success {
+  padding: 16px;
+  margin: 18px 0;
+  border: 1px solid var(--line);
+  overflow-wrap: anywhere;
+}
+
+.cs-error {
+  border-left: 4px solid var(--red);
+}
+
+.cs-success {
+  border-left: 4px solid var(--green);
+}
+
+.cs-log {
+  margin: 18px 0;
+  font-size: 13px;
+}
+
+.cs-log summary {
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.cs-log pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 300px;
+  overflow-y: auto;
+  padding: 12px;
+  background: var(--paper);
+  border: 1px solid var(--line);
+  font-family: var(--mono);
+  font-size: 12px;
+}

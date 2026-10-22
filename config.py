@@ -71,3 +71,14 @@ class Config:
 
 
     BARCODE_MAX_CONCURRENT_JOBS = int(os.getenv("BARCODE_MAX_CONCURRENT_JOBS", "2"))
+    
+    CORNER_SALE_SCRIPT = os.getenv(
+        "CORNER_SALE_SCRIPT",
+        r"D:\EVERBEST\NEW_GENERATOR\corner_sale\promolist.py"
+    )
+
+    CORNER_SALE_OUTPUT_FOLDER = os.getenv(
+        "CORNER_SALE_OUTPUT_FOLDER",
+        r"D:\EVERBEST\NEW_GENERATOR\corner_sale\output"
+    )
+

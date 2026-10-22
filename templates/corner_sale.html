@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Corner Sale Generator</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+  <div class="wrap">
+    <header class="topbar">
+      <div class="mark">EVB<span>·</span>GEN</div>
+      <div class="topbar-sub">Corner Sale Promolist Generator</div>
+    </header>
+
+    <main class="panel">
+      <h1>Generate Corner Sale</h1>
+      <p class="hint">
+        Jalankan script promolist untuk memproses template
+        dan menghasilkan Excel.
+      </p>
+
+      <div class="cs-info">
+        <strong>Persiapan file</strong>
+        <p>
+          Pastikan template tersedia di folder
+          <code>template</code> dan file input promosi tersedia
+          di folder <code>input</code> sesuai konfigurasi
+          pada script mentor.
+        </p>
+        <p>
+          Hasil proses akan disimpan di folder
+          <code>output</code>.
+        </p>
+      </div>
+
+      {% if error %}
+        <div class="cs-error">
+          <strong>{{ error }}</strong>
+        </div>
+      {% endif %}
+
+      {% if success %}
+        <div class="cs-success">
+          <strong>{{ success }}</strong>
+
+          {% if output_names %}
+            <p>File hasil:</p>
+            <ul>
+              {% for name in output_names %}
+                <li>{{ name }}</li>
+              {% endfor %}
+            </ul>
+          {% endif %}
+
+          {% if download_name %}
+            <a class="btn-primary"
+               href="{{ url_for('corner_sale.download', filename=download_name) }}">
+              Download Hasil ZIP
+            </a>
+          {% endif %}
+        </div>
+      {% endif %}
+
+      {% if log %}
+        <details class="cs-log">
+          <summary>Lihat log proses</summary>
+          <pre>{{ log }}</pre>
+        </details>
+      {% endif %}
+
+      <form method="POST"
+            action="{{ url_for('corner_sale.run') }}"
+            onsubmit="this.querySelector('button').disabled=true;
+                      this.querySelector('button').textContent='Memproses...';">
+        <button class="btn-primary" type="submit">
+          Generate Promolist
+        </button>
+      </form>
+
+      <div class="back-link">
+        <a href="{{ url_for('landing') }}">← Kembali ke menu utama</a>
+      </div>
+    </main>
+  </div>
+</body>
+</html>

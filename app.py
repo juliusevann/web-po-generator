@@ -5,6 +5,7 @@ from flask import Flask, render_template, request, Response
 from config import Config
 from routes.po_routes import po_bp
 from routes.barcode_routes import barcode_bp
+from routes.corner_sale_routes import corner_sale_bp
 
 app = Flask(__name__)
 app.config["SECRET_KEY"] = Config.SECRET_KEY
@@ -16,6 +17,7 @@ os.makedirs(Config.BARCODE_OUTPUT_FOLDER, exist_ok=True)
 
 app.register_blueprint(po_bp)
 app.register_blueprint(barcode_bp)
+app.register_blueprint(corner_sale_bp)
 
 
 # --- Basic Auth: aktif otomatis kalau APP_USERNAME & APP_PASSWORD diisi di .env ---
