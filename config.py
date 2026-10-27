@@ -82,3 +82,21 @@ class Config:
         r"D:\EVERBEST\NEW_GENERATOR\webapp\corner_sale\output"
     )
 
+
+    # --- Promo Result ---
+    PROMO_RESULT_SCRIPT = os.getenv(
+        "PROMO_RESULT_SCRIPT",
+        os.path.join(BASE_DIR, "promo_result", "generate_promo_result.py"),
+    )
+
+    PROMO_RESULT_INPUT_FOLDER = os.getenv(
+        "PROMO_RESULT_INPUT_FOLDER",
+        os.path.join(BASE_DIR, "promo_result", "input"),
+    )
+
+    PROMO_RESULT_OUTPUT_FOLDER = os.getenv(
+        "PROMO_RESULT_OUTPUT_FOLDER",
+        os.path.join(BASE_DIR, "promo_result", "output"),
+    )
+
+

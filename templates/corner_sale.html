@@ -9,7 +9,7 @@
 <body>
   <div class="wrap">
     <header class="topbar">
-      <div class="mark">EVB<span>·</span>GEN</div>
+      <div class="mark">CS<span>·</span>GEN</div>
       <div class="topbar-sub">Corner Sale Promolist Generator</div>
     </header>
 
@@ -68,6 +68,7 @@
           <pre>{{ log }}</pre>
         </details>
       {% endif %}
+      
 
       <form method="POST"
             action="{{ url_for('corner_sale.run') }}"
@@ -77,11 +78,12 @@
           Generate Promolist
         </button>
       </form>
-
-      <div class="back-link">
-        <a href="{{ url_for('landing') }}">← Kembali ke menu utama</a>
-      </div>
     </main>
+
+    <p class="back-link">
+      <a href="{{ url_for('landing') }}">← Kembali ke menu utama</a>
+    </p>
   </div>
 </body>
 </html>
+

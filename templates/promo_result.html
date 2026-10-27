@@ -1,0 +1,157 @@
+
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Promo Result Generator</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+  <div class="wrap">
+    <header class="topbar">
+      <div class="mark">PR<span>·</span>GEN</div>
+      <div class="topbar-sub">Promo Result &amp; Generator</div>
+    </header>
+
+    <main class="panel">
+      <section id="stage-upload" class="stage">
+        <h1>Proses file Promo Result</h1>
+
+        <p class="hint">
+          Upload file Excel dengan kolom <code>KODE_PROMO</code>,
+          <code>Start</code>, dan <code>End</code>.
+          Setiap baris akan diproses menjadi file Excel hasil promo.
+        </p>
+
+        <form method="POST" enctype="multipart/form-data" id="promo-form">
+          <label id="dropzone" for="input_file" class="dropzone">
+            <input
+              type="file"
+              id="input_file"
+              name="input_file"
+              accept=".xlsx,.xlsm"
+              hidden
+              required
+            >
+
+            <div class="dz-icon">⇪</div>
+
+            <div class="dz-text">
+              <strong>Klik untuk pilih file</strong>
+              <span>atau tarik &amp; lepas file .xlsx di sini</span>
+            </div>
+
+            <div class="dz-filename" id="dz-filename"></div>
+          </label>
+
+          <button
+            type="submit"
+            id="btn-process"
+            class="btn-primary"
+            disabled
+          >
+            Proses File
+          </button>
+
+          <p class="error-msg" id="upload-error" role="alert">
+            {{ error if error else '' }}
+          </p>
+        </form>
+      </section>
+
+      {% if results %}
+      <section id="stage-done" class="stage">
+        <h1>Selesai</h1>
+        <p class="hint">File Promo Result berhasil diproses dan siap diunduh.</p>
+
+        <div class="output-structure">
+          <div class="folder-line">
+            📁 <strong>Hasil Promo Result</strong>
+          </div>
+
+          {% for result in results %}
+          <div class="folder-line indent">
+            📄 {{ result.name }}
+            <a href="{{ result.url }}">Download Excel</a>
+          </div>
+          {% endfor %}
+        </div>
+      </section>
+      {% endif %}
+    </main>
+
+    <p class="back-link">
+      <a href="{{ url_for('landing') }}">← Kembali ke menu</a>
+    </p>
+  </div>
+
+  <script>
+    const input = document.getElementById("input_file");
+    const dropzone = document.getElementById("dropzone");
+    const filename = document.getElementById("dz-filename");
+    const button = document.getElementById("btn-process");
+    const form = document.getElementById("promo-form");
+
+    function updateFile(file) {
+      if (!file) {
+        filename.textContent = "";
+        button.disabled = true;
+        return;
+      }
+
+      const ext = file.name.split(".").pop().toLowerCase();
+
+      if (!["xlsx", "xlsm"].includes(ext)) {
+        filename.textContent = "Format harus .xlsx atau .xlsm";
+        button.disabled = true;
+        input.value = "";
+        return;
+      }
+
+      filename.textContent = file.name;
+      button.disabled = false;
+    }
+
+    input.addEventListener("change", () => {
+      updateFile(input.files[0]);
+    });
+
+    ["dragenter", "dragover"].forEach(eventName => {
+      dropzone.addEventListener(eventName, event => {
+        event.preventDefault();
+        dropzone.classList.add("drag-over");
+      });
+    });
+
+    ["dragleave", "drop"].forEach(eventName => {
+      dropzone.addEventListener(eventName, event => {
+        event.preventDefault();
+        dropzone.classList.remove("drag-over");
+      });
+    });
+
+    dropzone.addEventListener("drop", event => {
+      const files = event.dataTransfer.files;
+      if (!files.length) return;
+
+      const file = files[0];
+      const ext = file.name.split(".").pop().toLowerCase();
+
+      if (!["xlsx", "xlsm"].includes(ext)) {
+        filename.textContent = "Format harus .xlsx atau .xlsm";
+        button.disabled = true;
+        return;
+      }
+
+      input.files = files;
+      updateFile(file);
+    });
+
+    form.addEventListener("submit", () => {
+      button.disabled = true;
+      button.textContent = "Sedang memproses...";
+    });
+  </script>
+</body>
+</html>

@@ -151,7 +151,6 @@ code {
   color: var(--red);
   font-size: 13.5px;
   margin-top: 10px;
-  min-height: 18px;
 }
 
 /* --- Progress --- */
@@ -324,4 +323,56 @@ code {
   border: 1px solid var(--line);
   font-family: var(--mono);
   font-size: 12px;
+}
+
+
+/* --- Promo Result --- */
+#promo-form .dropzone input[type="file"] {
+  display: none;
+}
+
+#promo-form .btn-secondary {
+  margin-left: 8px;
+}
+
+.promo-results {
+  margin-top: 32px;
+}
+
+.promo-results h2 {
+  font-size: 19px;
+  margin-bottom: 8px;
+}
+
+.promo-results .row-item {
+  flex-wrap: wrap;
+}
+
+.promo-results .row-po {
+  flex: 1;
+  min-width: 150px;
+  overflow-wrap: anywhere;
+}
+
+.promo-results .btn-secondary {
+  margin: 0;
+  padding: 8px 12px;
+  font-size: 12.5px;
+}
+
+@media (max-width: 560px) {
+  .panel {
+    padding: 24px 18px;
+  }
+
+  .topbar {
+    flex-wrap: wrap;
+  }
+
+  #promo-form .btn-primary,
+  #promo-form .btn-secondary {
+    display: block;
+    width: 100%;
+    margin: 12px 0 0;
+  }
 }
