@@ -5,6 +5,9 @@
 __pycache__/
 *.py[cod]
 
+corner_sale/logs/
+corner_sale/output/
+
 # Generated outputs
 outputs/
 outputs_barcode/

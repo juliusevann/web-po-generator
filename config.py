@@ -74,11 +74,11 @@ class Config:
     
     CORNER_SALE_SCRIPT = os.getenv(
         "CORNER_SALE_SCRIPT",
-        r"D:\EVERBEST\NEW_GENERATOR\corner_sale\promolist.py"
+        r"D:\EVERBEST\NEW_GENERATOR\webapp\corner_sale\promolist.py"
     )
 
     CORNER_SALE_OUTPUT_FOLDER = os.getenv(
         "CORNER_SALE_OUTPUT_FOLDER",
-        r"D:\EVERBEST\NEW_GENERATOR\corner_sale\output"
+        r"D:\EVERBEST\NEW_GENERATOR\webapp\corner_sale\output"
     )
 
