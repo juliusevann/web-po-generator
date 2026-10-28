@@ -1,135 +1,147 @@
+import argparse
 import sys
 from pathlib import Path
+
 from functs import (
-    scan_excel, print_summary,
-    load_input_file, execute_query,
-    apply_input, recount,
-    write_promolist_excel, print_duplicate_warnings,
+    scan_excel,
+    print_summary,
+    load_input_file,
+    execute_query,
+    apply_input,
+    recount,
+    write_promolist_excel,
+    print_duplicate_warnings,
 )
 
-TEMPLATE_DIR = r'D:\EVERBEST\NEW_GENERATOR\webapp\corner_sale\template'
-OUTPUT_DIR   = r'D:\EVERBEST\NEW_GENERATOR\webapp\corner_sale\output'
-INPUT_DIR    = r'D:\EVERBEST\NEW_GENERATOR\webapp\corner_sale\input'
 
-if __name__ == '__main__':
-    template_dir = Path(TEMPLATE_DIR)
-    output_dir   = Path(OUTPUT_DIR)
-    input_dir    = Path(INPUT_DIR)
+def parse_args():
+    parser = argparse.ArgumentParser(
+        description="Corner Sale Promolist Generator"
+    )
+    parser.add_argument("--template-file", required=True)
+    parser.add_argument("--input-file", required=True)
+    parser.add_argument("--output-dir", required=True)
+    return parser.parse_args()
 
-    # --- Validasi folder ---
-    for d, label in [(template_dir, 'Template'), (input_dir, 'Input')]:
-        if not d.exists():
-            print(f"[ERROR] Folder {label} tidak ditemukan: {d}")
-            sys.exit(1)
+
+def main():
+    args = parse_args()
+
+    template_path = Path(args.template_file).resolve()
+    input_path = Path(args.input_file).resolve()
+    output_dir = Path(args.output_dir).resolve()
+
+    # Validasi file
+    for path, label in [
+        (template_path, "Template"),
+        (input_path, "Input"),
+    ]:
+        if not path.is_file():
+            print(f"[ERROR] File {label} tidak ditemukan: {path}")
+            return 1
+
+        if path.suffix.lower() not in {".xlsx", ".xlsm"}:
+            print(f"[ERROR] Format file {label} harus .xlsx atau .xlsm")
+            return 1
 
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    # =========================================================
-    # TAHAP 1 — Scan file Excel template -> promo_groups (memory)
-    # =========================================================
-    excel_files = [f for f in list(template_dir.glob('*.xlsx')) + list(template_dir.glob('*.xlsm'))
-                   if not f.name.startswith('~$')]
+    print(f"Template : {template_path.name}")
+    print(f"Input    : {input_path.name}")
+    print(f"Output   : {output_dir}")
 
-    if not excel_files:
-        print(f"[ERROR] Tidak ada file .xlsx / .xlsm di folder: {template_dir}")
-        sys.exit(1)
+    # Tahap 1: scan template yang diunggah user
+    print(f"\n{'=' * 60}")
+    print(f"Scanning template: {template_path.name}")
 
-    print(f"Template folder : {template_dir}")
-    print(f"Output folder   : {output_dir}")
-    print(f"Input folder    : {input_dir}")
-    print(f"File template   : {len(excel_files)} file ditemukan")
+    try:
+        promo_groups = scan_excel(str(template_path))
+        print_summary(promo_groups)
+        print_duplicate_warnings(promo_groups, "template")
+    except Exception as e:
+        print(f"[ERROR] Gagal scan template: {e}")
+        return 1
 
-    # { excel_stem: promo_groups_dict }
-    scanned = {}
+    # Tahap 2: baca file input
+    print(f"\n{'=' * 60}")
+    print(f"Membaca input: {input_path.name}")
 
-    for excel_path in excel_files:
-        print(f"\n{'='*60}")
-        print(f"Scanning : {excel_path.name}")
+    try:
+        input_rows = load_input_file(str(input_path))
+    except Exception as e:
+        print(f"[ERROR] Gagal membaca file input: {e}")
+        return 1
 
+    print(f"Instruksi ditemukan: {len(input_rows)} baris")
+
+    if not input_rows:
+        print("[ERROR] Tidak ada instruksi promo di file input.")
+        return 1
+
+    brands = list(dict.fromkeys(
+        row["brand"] for row in input_rows if row.get("brand")
+    ))
+
+    print(f"Brand ditemukan: {brands}")
+
+    if not brands:
+        print("[ERROR] Brand tidak ditemukan di file input.")
+        return 1
+
+    brand_code = brands[0].upper()
+
+    if len(brands) > 1:
+        print(
+            "[WARN] Ada lebih dari satu brand. "
+            f"Header menggunakan brand pertama: {brand_code}"
+        )
+
+    # Tahap 3: query database
+    print("\nMengeksekusi query SQL...")
+    query_data = {}
+
+    for brand in brands:
         try:
-            data = scan_excel(str(excel_path))
-            print_summary(data)
-            print_duplicate_warnings(data, 'template')
-            scanned[excel_path.stem] = data
+            result = execute_query(brand)
+
+            for article_key, colours in result.items():
+                query_data.setdefault(article_key, {}).update(colours)
+
+            print(
+                f"[OK] Brand '{brand}': "
+                f"{len(result)} artikel diterima"
+            )
         except Exception as e:
-            print(f"[ERROR] Gagal memproses {excel_path.name}: {e}")
+            print(f"[ERROR] Gagal query brand '{brand}': {e}")
+            return 1
 
-    # =========================================================
-    # TAHAP 2 — Baca input, hit SQL, apply ke promo_groups,
-    #           langsung output Excel
-    # =========================================================
-    input_files = list(input_dir.glob('*.xlsx')) + list(input_dir.glob('*.xlsm'))
-    # Lewati file lock Excel (~$...) yang muncul saat file input sedang dibuka
-    input_file  = next((f for f in input_files
-                        if not f.name.lower().startswith('hasil_query') and not f.name.startswith('~$')), None)
+    print(f"Total artikel dari DB: {len(query_data)}")
 
-    if not input_file:
-        print(f"\n[INFO] Tidak ada file input di: {input_dir}")
-        print("[INFO] Menyimpan hasil scan template tanpa perubahan...")
+    # Tahap 4: apply promo dan simpan hasil
+    try:
+        apply_input(promo_groups, input_rows, query_data)
+        recount(promo_groups)
+        print_duplicate_warnings(promo_groups, "output")
 
-        for stem, promo_groups in scanned.items():
-            excel_out = output_dir / (stem + '_promolist.xlsx')
-            template_path = template_dir / (stem + '.xlsx')
-            if not template_path.exists():
-                template_path = template_dir / (stem + '.xlsm')
-            print(f"\n{'='*60}")
-            print(f"Output : {excel_out.name}")
-            try:
-                write_promolist_excel(promo_groups, str(excel_out), template_path=str(template_path))
-            except Exception as e:
-                print(f"[ERROR] {stem}: {e}")
+        output_file = output_dir / (
+            f"{template_path.stem}_promolist.xlsx"
+        )
 
-    else:
-        print(f"\n{'='*60}")
-        print(f"TAHAP 2 — Apply Input")
-        print(f"Input file : {input_file.name}")
+        write_promolist_excel(
+            promo_groups,
+            str(output_file),
+            template_path=template_path,
+            brand=brand_code,
+        )
 
-        # Baca instruksi dari file input
-        input_rows = load_input_file(str(input_file))
-        print(f"  Instruksi ditemukan : {len(input_rows)} baris")
+        print(f"\n[OK] Output berhasil dibuat: {output_file}")
+    except Exception as e:
+        print(f"[ERROR] Gagal membuat output: {e}")
+        return 1
 
-        # Ambil semua brand unik
-        brands = list(dict.fromkeys(r['brand'] for r in input_rows if r['brand']))
-        print(f"  Brand ditemukan     : {brands}")
-        brand_code = brands[0].upper() if brands else 'EB'
-        if len(brands) > 1:
-            print(f"  [WARN] Lebih dari 1 brand di input, header memakai brand pertama: {brand_code}")
+    print("\nSelesai.")
+    return 0
 
-        # Eksekusi query SQL per brand
-        print(f"\n  Mengeksekusi query SQL...")
-        query_data = {}
-        for brand in brands:
-            try:
-                result = execute_query(brand)
-                for art_key, colours in result.items():
-                    if art_key not in query_data:
-                        query_data[art_key] = {}
-                    query_data[art_key].update(colours)
-                print(f"  [OK] Brand '{brand}': {len(result)} artikel diterima")
-            except Exception as e:
-                print(f"  [ERROR] Gagal query brand '{brand}': {e}")
-                sys.exit(1)
 
-        print(f"  Total artikel dari DB : {len(query_data)}")
-
-        # Apply ke setiap promo_groups hasil scan, lalu output Excel
-        for stem, promo_groups in scanned.items():
-            excel_out = output_dir / (stem + '_promolist.xlsx')
-            template_path = template_dir / (stem + '.xlsx')
-            if not template_path.exists():
-                template_path = template_dir / (stem + '.xlsm')
-            print(f"\n{'='*60}")
-            print(f"Memproses : {stem}")
-            print(f"Output    : {excel_out.name}")
-
-            try:
-                apply_input(promo_groups, input_rows, query_data)
-                recount(promo_groups)
-                print_duplicate_warnings(promo_groups, 'output')
-                write_promolist_excel(promo_groups, str(excel_out), template_path=str(template_path),
-                                      brand=brand_code)
-            except Exception as e:
-                print(f"  [ERROR] {stem}: {e}")
-
-    print(f"\n{'='*60}")
-    print("Selesai.")
+if __name__ == "__main__":
+    sys.exit(main())

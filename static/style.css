@@ -12,7 +12,10 @@
   --sans: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
 }
 
-* { box-sizing: border-box; }
+/* --- Global --- */
+* {
+  box-sizing: border-box;
+}
 
 body {
   margin: 0;
@@ -20,8 +23,7 @@ body {
   color: var(--ink);
   font-family: var(--sans);
   min-height: 100vh;
-  background-image:
-    linear-gradient(var(--line) 1px, transparent 1px);
+  background-image: linear-gradient(var(--line) 1px, transparent 1px);
   background-size: 100% 34px;
   background-position: 0 90px;
 }
@@ -32,6 +34,7 @@ body {
   padding: 0 20px 60px;
 }
 
+/* --- Header --- */
 .topbar {
   display: flex;
   align-items: baseline;
@@ -46,7 +49,10 @@ body {
   font-size: 22px;
   letter-spacing: 0.5px;
 }
-.mark span { color: var(--amber); }
+
+.mark span {
+  color: var(--amber);
+}
 
 .topbar-sub {
   font-size: 13px;
@@ -55,6 +61,7 @@ body {
   letter-spacing: 1.2px;
 }
 
+/* --- Main panel --- */
 .panel {
   background: var(--panel);
   border: 1px solid var(--line);
@@ -63,12 +70,19 @@ body {
   padding: 36px;
 }
 
-.stage.hidden { display: none; }
+.stage.hidden {
+  display: none;
+}
 
 h1 {
   font-size: 22px;
   margin: 0 0 8px;
   font-weight: 700;
+}
+
+h2 {
+  font-size: 19px;
+  margin: 0 0 8px;
 }
 
 .hint {
@@ -87,7 +101,121 @@ code {
   font-size: 13px;
 }
 
-/* --- Dropzone --- */
+/* --- Form elements: PO, Barcode, Corner Sale --- */
+.form-group {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 22px;
+}
+
+.form-group label {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.form-group input[type="text"],
+.form-group input[type="number"],
+.form-group input[type="email"],
+.form-group input[type="password"],
+.form-group input[type="file"],
+.form-group select,
+.form-group textarea {
+  width: 100%;
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid var(--line);
+  background: #fff;
+  color: var(--ink);
+  font-family: var(--sans);
+  font-size: 14px;
+  border-radius: 0;
+}
+
+.form-group input[type="file"] {
+  padding: 10px;
+  cursor: pointer;
+}
+
+.form-group input[type="file"]::file-selector-button {
+  padding: 8px 12px;
+  margin: -2px 12px -2px -2px;
+  border: 1px solid var(--line);
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--sans);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.form-group input[type="file"]::file-selector-button:hover {
+  background: #e8e3d8;
+}
+
+.form-group input:focus,
+.form-group select:focus,
+.form-group textarea:focus {
+  outline: 2px solid var(--amber);
+  outline-offset: 1px;
+}
+
+.form-group small {
+  font-size: 12.5px;
+  color: var(--ink-soft);
+  line-height: 1.5;
+}
+
+/* --- Buttons --- */
+.btn-primary,
+.btn-secondary {
+  display: inline-block;
+  font-family: var(--sans);
+  font-size: 14.5px;
+  font-weight: 600;
+  padding: 13px 26px;
+  border: none;
+  cursor: pointer;
+  margin-top: 22px;
+  text-decoration: none;
+  text-align: center;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.btn-primary {
+  background: var(--ink);
+  color: #fff;
+}
+
+.btn-primary:disabled {
+  background: #b7b2a6;
+  cursor: not-allowed;
+}
+
+.btn-primary:not(:disabled):hover {
+  background: var(--amber-dark);
+}
+
+.btn-secondary {
+  background: transparent;
+  color: var(--ink);
+  border: 1.5px solid var(--ink);
+}
+
+.btn-secondary:hover {
+  background: var(--ink);
+  color: #fff;
+}
+
+/* --- Error message --- */
+.error-msg {
+  color: var(--red);
+  font-size: 13.5px;
+  margin-top: 10px;
+}
+
+/* --- Dropzone: PO / Barcode / Promo Result --- */
 .dropzone {
   display: flex;
   flex-direction: column;
@@ -100,57 +228,36 @@ code {
   transition: border-color 0.15s, background 0.15s;
   text-align: center;
 }
-.dropzone:hover, .dropzone.drag-over {
+
+.dropzone:hover,
+.dropzone.drag-over {
   border-color: var(--amber);
   background: #fbf3ea;
 }
+
 .dz-icon {
   font-size: 26px;
   color: var(--amber);
   transform: rotate(180deg);
 }
-.dz-text strong { display: block; font-size: 15px; }
-.dz-text span { display: block; font-size: 13px; color: var(--ink-soft); margin-top: 2px; }
+
+.dz-text strong {
+  display: block;
+  font-size: 15px;
+}
+
+.dz-text span {
+  display: block;
+  font-size: 13px;
+  color: var(--ink-soft);
+  margin-top: 2px;
+}
+
 .dz-filename {
   font-family: var(--mono);
   font-size: 13px;
   color: var(--green);
   min-height: 18px;
-}
-
-.btn-primary, .btn-secondary {
-  display: inline-block;
-  font-family: var(--sans);
-  font-size: 14.5px;
-  font-weight: 600;
-  padding: 13px 26px;
-  border: none;
-  cursor: pointer;
-  margin-top: 22px;
-  text-decoration: none;
-  text-align: center;
-}
-.btn-primary {
-  background: var(--ink);
-  color: #fff;
-}
-.btn-primary:disabled {
-  background: #b7b2a6;
-  cursor: not-allowed;
-}
-.btn-primary:not(:disabled):hover { background: var(--amber-dark); }
-
-.btn-secondary {
-  background: transparent;
-  color: var(--ink);
-  border: 1.5px solid var(--ink);
-}
-.btn-secondary:hover { background: var(--ink); color: #fff; }
-
-.error-msg {
-  color: var(--red);
-  font-size: 13.5px;
-  margin-top: 10px;
 }
 
 /* --- Progress --- */
@@ -160,12 +267,14 @@ code {
   border: 1px solid var(--line);
   overflow: hidden;
 }
+
 .progress-fill {
   height: 100%;
   width: 0%;
   background: var(--amber);
   transition: width 0.3s ease;
 }
+
 .progress-numbers {
   display: flex;
   justify-content: space-between;
@@ -181,6 +290,7 @@ code {
   overflow-y: auto;
   border-top: 1px solid var(--line);
 }
+
 .row-item {
   display: flex;
   align-items: center;
@@ -190,16 +300,34 @@ code {
   font-family: var(--mono);
   font-size: 13px;
 }
+
 .row-status {
   width: 16px;
   text-align: center;
   flex-shrink: 0;
 }
-.row-status.ok { color: var(--green); }
-.row-status.fail { color: var(--red); }
-.row-status.pending { color: var(--ink-soft); }
-.row-po { font-weight: 700; }
-.row-ref { color: var(--ink-soft); flex: 1; }
+
+.row-status.ok {
+  color: var(--green);
+}
+
+.row-status.fail {
+  color: var(--red);
+}
+
+.row-status.pending {
+  color: var(--ink-soft);
+}
+
+.row-po {
+  font-weight: 700;
+}
+
+.row-ref {
+  color: var(--ink-soft);
+  flex: 1;
+}
+
 .row-err {
   width: 100%;
   color: var(--red);
@@ -208,7 +336,7 @@ code {
   margin-top: -4px;
 }
 
-/* --- Done --- */
+/* --- Done / output --- */
 .output-structure {
   margin: 20px 0 8px;
   background: var(--paper);
@@ -217,18 +345,35 @@ code {
   font-family: var(--mono);
   font-size: 13px;
 }
-.folder-line { padding: 3px 0; }
-.folder-line.indent { padding-left: 20px; }
-.muted { color: var(--ink-soft); }
 
-#btn-reset { margin-left: 12px; }
+.folder-line {
+  padding: 3px 0;
+}
+
+.folder-line.indent {
+  padding-left: 20px;
+}
+
+.muted {
+  color: var(--ink-soft);
+}
+
+#btn-reset {
+  margin-left: 12px;
+}
 
 /* --- Landing page --- */
 .landing-panel {
   text-align: center;
 }
-.landing-panel h1 { margin-bottom: 6px; }
-.landing-panel .hint { margin-bottom: 32px; }
+
+.landing-panel h1 {
+  margin-bottom: 6px;
+}
+
+.landing-panel .hint {
+  margin-bottom: 32px;
+}
 
 .landing-menu {
   display: flex;
@@ -248,31 +393,47 @@ code {
   border: 1.5px solid var(--line);
   text-decoration: none;
   color: var(--ink);
-  transition: transform 0.15s ease, border-color 0.15s ease, background 0.15s ease;
+  transition: transform 0.15s ease, border-color 0.15s ease,
+    background 0.15s ease;
 }
+
 .landing-card:hover {
   transform: translateY(-4px);
   border-color: var(--amber);
   background: #fbf3ea;
 }
-.landing-card-icon { font-size: 34px; }
-.landing-card-title { font-weight: 700; font-size: 16px; }
-.landing-card-sub { font-size: 12.5px; color: var(--ink-soft); }
 
-/* --- Link kembali ke landing, dipakai di po.html & barcode.html --- */
+.landing-card-icon {
+  font-size: 34px;
+}
+
+.landing-card-title {
+  font-weight: 700;
+  font-size: 16px;
+}
+
+.landing-card-sub {
+  font-size: 12.5px;
+  color: var(--ink-soft);
+}
+
+/* --- Back link --- */
 .back-link {
   text-align: center;
   margin-top: 20px;
 }
+
 .back-link a {
   color: var(--ink-soft);
   font-size: 13.5px;
   text-decoration: none;
 }
-.back-link a:hover { color: var(--amber-dark); }
 
+.back-link a:hover {
+  color: var(--amber-dark);
+}
 
-/* Corner Sale */
+/* --- Corner Sale --- */
 .cs-info {
   padding: 16px;
   margin: 24px 0;
@@ -282,9 +443,20 @@ code {
   font-size: 13.5px;
 }
 
+.cs-info strong {
+  display: block;
+  margin-bottom: 8px;
+}
+
 .cs-info p {
   color: var(--ink-soft);
+  margin: 10px 0 0;
   overflow-wrap: anywhere;
+}
+
+.cs-info p b {
+  color: var(--ink);
+  font-weight: 600;
 }
 
 .cs-error,
@@ -301,6 +473,16 @@ code {
 
 .cs-success {
   border-left: 4px solid var(--green);
+}
+
+.cs-success p {
+  margin-bottom: 8px;
+}
+
+.cs-success ul {
+  padding-left: 20px;
+  line-height: 1.7;
+  overflow-wrap: anywhere;
 }
 
 .cs-log {
@@ -324,7 +506,6 @@ code {
   font-family: var(--mono);
   font-size: 12px;
 }
-
 
 /* --- Promo Result --- */
 #promo-form .dropzone input[type="file"] {
@@ -360,7 +541,13 @@ code {
   font-size: 12.5px;
 }
 
+/* --- Responsive --- */
 @media (max-width: 560px) {
+  .wrap {
+    padding-right: 16px;
+    padding-left: 16px;
+  }
+
   .panel {
     padding: 24px 18px;
   }
@@ -369,10 +556,36 @@ code {
     flex-wrap: wrap;
   }
 
+  .topbar-sub {
+    line-height: 1.5;
+  }
+
+  .landing-menu {
+    gap: 14px;
+  }
+
+  .landing-card {
+    width: 100%;
+    padding: 28px 18px;
+  }
+
+  .btn-primary,
+  .btn-secondary {
+    max-width: 100%;
+  }
+
+  .panel form > .btn-primary {
+    width: 100%;
+  }
+
   #promo-form .btn-primary,
   #promo-form .btn-secondary {
     display: block;
     width: 100%;
     margin: 12px 0 0;
+  }
+
+  #btn-reset {
+    margin-left: 0;
   }
 }
