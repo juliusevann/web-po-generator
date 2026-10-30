@@ -30,7 +30,7 @@ template_mapping = {
     "VBH": "PO VH TEMPLATE.xlsx",
     "VBL": "PO VL TEMPLATE.xlsx",
     "EBL_RO" : "RO Template Shoes.xlsx",
-    "EBM_RO" : "RO Template Shoes MEN.xlsx",
+    "EBM_RO" : "RO Template Shoes.xlsx",
     "VBL_RO" : "TEMPLATE RO VBL.xlsx",
     "EBSLS": "PO Belts.xlsx",
     "EBSMS": "PO Belts.xlsx",
@@ -982,6 +982,111 @@ def fill_th_vh_template(ws, api_data, datas, prefix, template_file=None):
     return True
 
 
+
+def adapt_ro_shoes_template_for_men(ws):
+    """Add the eighth MEN size column only inside the two RO size tables.
+
+    The worksheet's other columns, merged areas, pictures, and lower-page
+    layout are left untouched.  The source template remains unchanged because
+    the generator opens it and edits the workbook copy in memory.
+    """
+    expected_sizes = [39, 40, 41, 42, 43, 44, 45, 46]
+
+    def read_sizes(addresses):
+        values = []
+        for address in addresses:
+            value = ws.range(address).value
+            try:
+                values.append(int(float(value)))
+            except (TypeError, ValueError):
+                return []
+        return values
+
+    top_addresses = [f"{col}9" for col in "EFGHIJKL"]
+    bottom_addresses = [f"{col}20" for col in "GHIJKLMN"]
+    top_now = read_sizes(top_addresses)
+    bottom_now = read_sizes(bottom_addresses)
+
+    # Prevent duplicate cell insertion if this function is called twice.
+    if top_now == expected_sizes and bottom_now == expected_sizes:
+        print("[RO MEN] Delapan kolom size sudah tersedia; insert dilewati.", flush=True)
+    else:
+        print("[RO MEN] Menambah kolom size ke-8 pada tabel RO saja.", flush=True)
+
+        # TOP TABLE:
+        # L8:L10 is the merged QTY CARTON header. Unmerge it temporarily,
+        # insert cells only in rows 8-18, then restore the header merge at M.
+        try:
+            ws.api.Range("L8:L10").UnMerge()
+        except Exception:
+            pass
+
+        # xlShiftToRight = -4161; this does NOT insert an entire worksheet column.
+        ws.api.Range("L8:L18").Insert(Shift=-4161, CopyOrigin=0)
+
+        # The original QTY CARTON header moved from L to M.
+        try:
+            ws.api.Range("M8:M10").Merge()
+        except Exception:
+            pass
+
+        # Make the new 8th size header cell match the neighboring size header.
+        try:
+            ws.api.Range("K9:K10").Copy()
+            ws.api.Range("L9:L10").PasteSpecial(Paste=-4122)  # xlPasteFormats
+            ws.api.Application.CutCopyMode = False
+            ws.api.Range("L9:L10").Merge()
+        except Exception as format_error:
+            print(f"[RO MEN] Format header size ke-8: {format_error}", flush=True)
+
+        # Match the new quantity cells to the previous size column, only in
+        # the item rows (not across the whole worksheet column).
+        try:
+            ws.api.Range("K11:K17").Copy()
+            ws.api.Range("L11:L17").PasteSpecial(Paste=-4122)
+            ws.api.Application.CutCopyMode = False
+        except Exception as format_error:
+            print(f"[RO MEN] Format quantity size ke-8: {format_error}", flush=True)
+
+        # BOTTOM TABLE:
+        # Insert only in rows 20-26, so TOTAL moves N -> O without moving
+        # pictures or anything below the table.
+        ws.api.Range("N20:N26").Insert(Shift=-4161, CopyOrigin=0)
+        try:
+            ws.api.Range("M20:M25").Copy()
+            ws.api.Range("N20:N25").PasteSpecial(Paste=-4122)
+            ws.api.Application.CutCopyMode = False
+        except Exception as format_error:
+            print(f"[RO MEN] Format breakdown size ke-8: {format_error}", flush=True)
+
+    # Write MEN size labels after the cell shifts are complete.
+    for col, size in zip("EFGHIJKL", expected_sizes):
+        ws.range(f"{col}9").value = size
+    for col, size in zip("GHIJKLMN", expected_sizes):
+        ws.range(f"{col}20").value = size
+
+    # Update only formulas affected by the added size column.
+    # Top table: QTY CARTON=M, QTY PAIRS=N, UNIT PRICE=O, AMOUNT=P.
+    for row in range(11, 18):
+        ws.range(f"M{row}").formula = f"=SUM(E{row}:L{row})/20"
+        ws.range(f"N{row}").formula = f"=SUM(E{row}:L{row})"
+        ws.range(f"P{row}").formula = f"=N{row}*O{row}"
+    ws.range("M18").formula = "=SUM(M11:M17)"
+    ws.range("N18").formula = "=SUM(N11:N17)"
+    ws.range("P18").formula = "=SUM(P11:P14)"
+
+    # Bottom table: TOTAL=O, summing all eight sizes G:N.
+    for row in range(21, 26):
+        ws.range(f"O{row}").formula = f"=SUM(G{row}:N{row})"
+    ws.range("O26").formula = "=SUM(O21:O25)"
+
+    print(
+        "[RO MEN] Size siap: top E:L = 39-46; breakdown G:N = 39-46. "
+        "Layout di luar tabel size tidak digeser.",
+        flush=True,
+    )
+
+
 def fill_template_with_res(po_code, jenis_template, api_data, output_path,datas):
     print(f"[INFO] Proses input {jenis_template} - {po_code}...")
 
@@ -1063,7 +1168,7 @@ def fill_template_with_res(po_code, jenis_template, api_data, output_path,datas)
                         safe_set_cell(ws.range(f"{col}21"), size) 
                         
                 bottom_size_columns = {}
-                for col in ['G', 'H', 'I', 'J', 'K','L','M']:
+                for col in ['G', 'H', 'I', 'J', 'K','L','M','N']:
                     size_value = ws.range(f"{col}21").value
                     if size_value:
                         bottom_size_columns[int(size_value)] = col
@@ -1152,7 +1257,7 @@ def fill_template_with_res(po_code, jenis_template, api_data, output_path,datas)
                             cell_letter = None
                     if cell_letter:
                         col_letter = ws.range((10, col)).get_address().split("$")[1]
-                        size_columns[str(cell_letter).strip().upper()] = col_letter
+                        size_columns[str(cell_letter).strip().upper()] = col_letter               
 
                 size_suffix_list = []
 
@@ -1476,8 +1581,8 @@ def fill_template_with_res(po_code, jenis_template, api_data, output_path,datas)
                 api_range = (api_data.get("range") or "").strip().upper()
 
                 if api_range == 'MEN':
-                    sizes = [39, 40, 41, 42, 43, 44, 45]
-                    for col, size in zip(['E','F','G', 'H', 'I', 'J', 'K'], sizes):
+                    sizes = [39, 40, 41, 42, 43, 44, 45, 46]
+                    for col, size in zip(['E','F','G', 'H', 'I', 'J', 'K', 'L'], sizes):
                         safe_set_cell(ws.range(f"{col}9"), size)
                         size_columns_top[size] = col
                     
@@ -1561,6 +1666,7 @@ def fill_template_with_res(po_code, jenis_template, api_data, output_path,datas)
         elif jenis_template in ['EBM_RO'] and ro_na == 'REPEAT ORDER':
             try:
                 print("[INFO] Menulis format template RO EB SHOES MENS")
+                adapt_ro_shoes_template_for_men(ws)
                 
                 safe_set_cell(ws.range('B2'), f": {po}")
                 safe_set_cell(ws.range('B4'), api_data.get("date", ""))
@@ -2230,7 +2336,7 @@ def generate_po_excel(po_code, ref, excel_dir):
             False,
             None,
             f"Generator mengembalikan sukses tetapi file tidak ditemukan: "
-            f"{output_file}",
+            f"{output_file}",g
         )
 
     return True, output_file, None
