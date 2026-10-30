@@ -2336,7 +2336,7 @@ def generate_po_excel(po_code, ref, excel_dir):
             False,
             None,
             f"Generator mengembalikan sukses tetapi file tidak ditemukan: "
-            f"{output_file}",g
+            f"{output_file}",
         )
 
     return True, output_file, None
