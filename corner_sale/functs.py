@@ -2408,32 +2408,44 @@ def _pick_header_suffix(promo_groups: dict, sheet_name: str, art_code: str) -> O
 def _find_source_tables(promo_groups: dict, sheet_name: str,
                         category_suffix: Optional[str], art_code: str,
                         exclude_key: Optional[str] = None) -> list:
+    """Cari tabel sumber aktual. Utamakan kategori yang cocok, lalu fallback
+    ke tabel lain pada sheet yang sama jika artikel tidak ditemukan di kategori
+    tersebut. Fallback ini menangani template yang suffix/header-nya tidak
+    konsisten dengan mapping database, tanpa mengubah tabel lain jika match
+    kategori yang tepat sudah tersedia.
     """
-    Cari SEMUA tabel promo di sheet_name (dengan kategori yang cocok --
-    category_suffix sama, atau tabel tanpa kategori seperti SP yang dipakai
-    bersama semua kategori) yang SAAT INI benar-benar menyimpan baris untuk
-    art_code.
-
-    FIX PENTING: sebelumnya kode menentukan tabel asal artikel (moved_from)
-    dengan MENEBAK dari field 'Promotion' di database (GA_LIBREART5). Kalau
-    field itu kosong/'NML'/tidak sinkron dengan kondisi sebenarnya di file
-    Excel -- yang ternyata sangat sering terjadi -- maka penghapusan dari
-    tabel lama gagal total secara diam-diam: artikel tetap nangkring di
-    tabel lama SEKALIGUS ditambahkan ke tabel baru (duplikat).
-
-    Dengan mencari langsung ke isi hasil scan Excel (ground truth), proses
-    hapus/pindah artikel tidak lagi bergantung pada field database yang bisa
-    saja sudah usang atau tidak pernah di-update.
-    """
-    found = []
-    for key, table in promo_groups.get(sheet_name, {}).items():
+    tables = promo_groups.get(sheet_name, {})
+    exact, fallback = [], []
+    for key, table in tables.items():
         if key == exclude_key:
             continue
-        if table.category_suffix not in (category_suffix, None):
+        if not any(str(r.article).strip().upper() == art_code for r in table.rows):
             continue
-        if any(r.article.upper() == art_code for r in table.rows):
-            found.append((key, table))
-    return found
+        fallback.append((key, table))
+        if getattr(table, 'category_suffix', None) in (category_suffix, None):
+            exact.append((key, table))
+    if exact:
+        return exact
+    if fallback:
+        print(f"  [WARN] {art_code}: sumber tidak ditemukan pada kategori '{category_suffix}', "
+              f"fallback mencari seluruh tabel di sheet '{sheet_name}'.")
+    return fallback
+
+
+def _resolve_colour_key(q_records: dict, requested_colour: Optional[str]) -> Optional[str]:
+    """Temukan key warna dari hasil query meskipun beda kapital/spasi/tanda baca."""
+    if requested_colour is None:
+        return None
+    requested = str(requested_colour).strip().upper()
+    if requested in q_records:
+        return requested
+    norm = re.sub(r'[^A-Z0-9]', '', requested)
+    for key, rec in q_records.items():
+        key_norm = re.sub(r'[^A-Z0-9]', '', str(key).upper())
+        rec_colour = re.sub(r'[^A-Z0-9]', '', str(rec.get('colour', '')).upper())
+        if norm and norm in (key_norm, rec_colour):
+            return key
+    return None
 
 
 def apply_input(promo_groups: dict, input_rows: list, query_data: dict):
@@ -2491,7 +2503,8 @@ def apply_input(promo_groups: dict, input_rows: list, query_data: dict):
         combo_key = resolve_table_key(promo_groups, sheet_name, target_key, suffix)
         if combo_key in promo_groups[sheet_name]:
             target_store_key = combo_key
-        elif target_key in promo_groups[sheet_name]:
+        elif (target_key in promo_groups[sheet_name]
+              and getattr(promo_groups[sheet_name][target_key], 'category_suffix', None) in (suffix, None)):
             target_store_key = target_key
         else:
             # Sheet yang tabelnya dipakai bersama (header tanpa kategori SHEET_MAP,
@@ -2511,8 +2524,22 @@ def apply_input(promo_groups: dict, input_rows: list, query_data: dict):
 
         target_table = promo_groups[sheet_name][target_store_key]
 
-        # Tentukan warna yang diproses
-        colours_to_process = list(q_records.keys()) if in_colour is None else [in_colour]
+        # Tentukan warna yang diproses. Input warna dapat berbeda kapital,
+        # spasi, atau tanda baca dari Colour_Desc hasil database.
+        if in_colour is None:
+            colours_to_process = list(q_records.keys())
+        else:
+            resolved_colour = _resolve_colour_key(q_records, in_colour)
+            if resolved_colour is None:
+                if len(q_records) == 1:
+                    resolved_colour = next(iter(q_records))
+                    print(f"  [COLOR-MAP] {art_code}: warna input '{in_colour}' tidak cocok dengan DB; "
+                          f"menggunakan satu-satunya warna DB '{q_records[resolved_colour].get('colour', resolved_colour)}'.")
+                else:
+                    print(f"  [WARN] {art_code}: warna input '{in_colour}' tidak ditemukan. "
+                          f"Warna tersedia: {list(q_records.keys())}. Instruksi dilewati agar tidak salah warna.")
+                    continue
+            colours_to_process = [resolved_colour]
 
         # Cek apakah semua warna yang diproses punya harga sama (untuk All Colour collapse)
         prices_to_check = [q_records[c]['retail_price'] for c in colours_to_process if c in q_records]
@@ -2575,6 +2602,15 @@ def apply_input(promo_groups: dict, input_rows: list, query_data: dict):
                 print(f"  [DEDUPE] {art_code}: {removed_dupe} row lama di {target_store_key} "
                       f"dihapus, digabung jadi All Colour")
 
+            # Warna highlight baris mengikuti Item Group ASAL pada file input.
+            # Tabel sumber hasil scan bisa berbeda/keliru karena data template
+            # lama atau artikel sudah lebih dulu berpindah. Untuk label warna,
+            # instruksi input adalah acuan: D40 -> hijau, D30 -> biru, dst.
+            if src_group_fallback and src_group_fallback != target_key:
+                input_source_key = normalize_key(src_group_fallback)
+                if input_source_key:
+                    all_colour_moved_from = input_source_key
+
             moved_to_val = target_key if all_colour_moved_from else None
             target_table.rows.append(PromoRow(
                 article=sample['article'],
@@ -2599,18 +2635,68 @@ def apply_input(promo_groups: dict, input_rows: list, query_data: dict):
                 print(f"  [WARN] {art_code} colour={col_key}: tidak ditemukan di query, dilewati.")
                 continue
 
-            harga_awal    = rec['retail_price']
-            actual_colour = rec['colour']
+            harga_awal = rec['retail_price']
+            # Jika user mengisi warna secara eksplisit, tulis persis warna dari
+            # file input (bukan label warna lama/template dari database).
+            actual_colour = str(in_colour).strip() if in_colour is not None else rec['colour']
 
             # FIX: cari tabel sumber utk warna ini dari ground truth (isi
             # tabel sebenarnya), bukan dari field 'Promotion' di database.
             src_match = None
             for src_key, src_table in source_tables:
-                if any(r.article.upper() == art_code and
-                       r.colour.upper() in (col_key, 'ALL COLOUR')
+                if any(r.article.strip().upper() == art_code and
+                       (r.colour.strip().upper() in (str(col_key).strip().upper(), 'ALL COLOUR'))
                        for r in src_table.rows):
                     src_match = (src_key, src_table)
                     break
+
+            # Jika warna pada template salah (mis. template masih abu/putih,
+            # sedangkan master DB menunjukkan hijau), exact match tidak ketemu.
+            # Koreksi otomatis hanya jika tepat satu baris artikel tersedia di
+            # tabel sumber; jika lebih dari satu, jangan menebak warna mana.
+            source_row_to_replace = None
+
+            if src_match is None:
+                # Warna input adalah acuan. Cari baris lama yang warnanya
+                # TIDAK dikenal di master DB, sehingga warna lain yang valid
+                # untuk artikel yang sama tetap aman.
+                valid_db_colours = {
+                    re.sub(r'[^A-Z0-9]', '', str(value).strip().upper())
+                    for key, value in (
+                        [(k, k) for k in q_records.keys()]
+                        + [(k, v.get('colour', '')) for k, v in q_records.items()]
+                    )
+                    if value
+                }
+
+                stale_candidates = []
+                all_article_candidates = []
+                for candidate_key, candidate_table in source_tables:
+                    for candidate_row in candidate_table.rows:
+                        if (candidate_row.article.strip().upper() == art_code
+                                and candidate_row.colour.strip().upper() != 'ALL COLOUR'):
+                            item = (candidate_key, candidate_table, candidate_row)
+                            all_article_candidates.append(item)
+                            old_colour_norm = re.sub(
+                                r'[^A-Z0-9]', '', candidate_row.colour.strip().upper()
+                            )
+                            if old_colour_norm not in valid_db_colours:
+                                stale_candidates.append(item)
+
+                # Prioritaskan satu warna lama yang tidak ada di master DB.
+                # Fallback ke satu-satunya baris artikel jika memang hanya ada
+                # satu baris, seperti kasus warna template yang salah.
+                candidates_to_replace = stale_candidates or all_article_candidates
+                if len(candidates_to_replace) == 1:
+                    candidate_key, candidate_table, candidate_row = candidates_to_replace[0]
+                    src_match = (candidate_key, candidate_table)
+                    source_row_to_replace = candidate_row
+                    print(f"  [COLOR-CORRECTION] {art_code}: warna lama "
+                          f"'{candidate_row.colour}' akan diganti menjadi '{actual_colour}' "
+                          f"sesuai warna input.")
+                elif len(candidates_to_replace) > 1:
+                    print(f"  [WARN] {art_code}/{actual_colour}: ditemukan beberapa baris warna "
+                          f"lama yang mungkin cocok; tidak menghapus warna lain secara otomatis.")
 
             harga_fallback = None
             moved_from = None
@@ -2639,10 +2725,24 @@ def apply_input(promo_groups: dict, input_rows: list, query_data: dict):
                     )
                 else:
                     before_n = len(src_table.rows)
-                    src_table.rows = [
-                        r for r in src_table.rows
-                        if not (r.article.upper() == art_code and r.colour.upper() == col_key)
-                    ]
+
+                    if source_row_to_replace is not None:
+                        # Hapus objek baris lama yang sudah dipastikan sebagai
+                        # kandidat koreksi warna. Jangan bandingkan dengan
+                        # col_key karena nilainya memang berbeda dari warna input.
+                        src_table.rows = [
+                            r for r in src_table.rows if r is not source_row_to_replace
+                        ]
+                        print(f"  [COLOR-REPLACE] {art_code}: "
+                              f"'{source_row_to_replace.colour}' -> '{actual_colour}' "
+                              f"di tabel sumber {src_key}.")
+                    else:
+                        src_table.rows = [
+                            r for r in src_table.rows
+                            if not (r.article.strip().upper() == art_code and
+                                    r.colour.strip().upper() == str(col_key).strip().upper())
+                        ]
+
                     if len(src_table.rows) != before_n:
                         print(f"  [MOVE] {art_code}/{actual_colour}: {src_key} -> {target_store_key}")
             else:
@@ -2661,14 +2761,69 @@ def apply_input(promo_groups: dict, input_rows: list, query_data: dict):
                 continue
 
             harga_diskon = compute_harga_diskon(harga_awal, target_key)
+
+            # Sumber warna highlight wajib mengikuti Item Group pada input,
+            # bukan discount_key tabel yang kebetulan ditemukan saat scan.
+            # Contoh: D40 -> D50 tetap diberi warna hijau (asal D40),
+            # sedangkan D30 -> D50 diberi warna biru (asal D30).
+            if src_group_fallback and src_group_fallback != target_key:
+                input_source_key = normalize_key(src_group_fallback)
+                if input_source_key:
+                    moved_from = input_source_key
+
             moved_to = target_key if moved_from else None
 
             # Tambah ke tabel target
-            already = any(r.article.upper() == art_code and r.colour.upper() == actual_colour.upper()
-                          for r in target_table.rows)
-            if already:
-                print(f"  [SKIP] {art_code}/{actual_colour}: sudah ada di {target_store_key}")
+            article_target_rows = [r for r in target_table.rows
+                                   if r.article.strip().upper() == art_code]
+            existing_target = next((r for r in article_target_rows
+                                    if r.colour.strip().upper() == actual_colour.strip().upper()), None)
+            if existing_target:
+                existing_target.harga_awal = harga_awal
+                existing_target.harga_diskon = harga_diskon
+                if moved_from:
+                    existing_target.moved_from = moved_from
+                    existing_target.moved_to = target_key
+                print(f"  [UPDATE] {art_code}/{actual_colour} di {target_store_key}: "
+                      f"harga_awal={harga_awal}, harga_diskon={harga_diskon}")
                 continue
+
+            # Jika warna input belum ada di tabel tujuan, cari satu baris
+            # artikel yang warnanya tidak dikenal di master DB. Ganti hanya
+            # baris tersebut; warna lain yang valid tetap dipertahankan.
+            if in_colour is not None and article_target_rows:
+                valid_db_colours = {
+                    re.sub(r'[^A-Z0-9]', '', str(value).strip().upper())
+                    for key, value in (
+                        [(k, k) for k in q_records.keys()]
+                        + [(k, v.get('colour', '')) for k, v in q_records.items()]
+                    )
+                    if value
+                }
+                stale_target_rows = [
+                    r for r in article_target_rows
+                    if re.sub(r'[^A-Z0-9]', '', r.colour.strip().upper())
+                    not in valid_db_colours
+                ]
+
+                # Jika hanya ada satu baris artikel di target, itu juga boleh
+                # dikoreksi meskipun warna lama masih tercatat di DB.
+                candidates_to_replace = stale_target_rows or (
+                    article_target_rows if len(article_target_rows) == 1 else []
+                )
+
+                if len(candidates_to_replace) == 1:
+                    stale_target = candidates_to_replace[0]
+                    old_colour = stale_target.colour
+                    stale_target.colour = actual_colour
+                    stale_target.harga_awal = harga_awal
+                    stale_target.harga_diskon = harga_diskon
+                    if moved_from:
+                        stale_target.moved_from = moved_from
+                        stale_target.moved_to = target_key
+                    print(f"  [COLOR-CORRECTION] {art_code}: '{old_colour}' -> "
+                          f"'{actual_colour}' sesuai input di tabel tujuan {target_store_key}.")
+                    continue
 
             target_table.rows.append(PromoRow(
                 article=rec['article'],
