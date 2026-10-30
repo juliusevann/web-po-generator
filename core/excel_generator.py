@@ -261,45 +261,46 @@ def _collect_article_codes(value, result=None):
 
 
 def resolve_article_candidates(api_data):
-    """Build all useful identities for locating SAMPLE PHOTO files.
+    """Ambil kandidat nama/kode artikel dari field API yang relevan saja.
 
-    The API may return the commercial article name (e.g. ``AVENIA``), while
-    SAMPLE PHOTO filenames may use the internal article/style code
-    (e.g. ``271VB003_CHALKBEIGE.png``).  Therefore photo lookup must NOT rely
-    only on ``article.name``.
-
-    Candidate order:
-      1. article.name
-      2. explicit style/article/option code fields
-      3. article_name_vl / article_name_vh
-      4. other code-like values found recursively in the API response
+    Tidak melakukan scan rekursif seluruh response karena field tanggal,
+    delivery date, dan deskripsi bisa ikut terbaca sebagai kandidat artikel.
     """
-    article = api_data.get("article", {}) or {}
+    api_data = api_data or {}
+    article = api_data.get("article") or {}
+    if not isinstance(article, dict):
+        article = {}
+
     candidates = []
 
     def add(value):
-        if value is None:
+        if value is None or isinstance(value, (dict, list, tuple)):
             return
-        text = str(value).strip()
-        if text and text not in candidates:
-            candidates.append(text)
+        value = str(value).strip()
+        if not value or value in ("-", "None", "null"):
+            return
+        # Abaikan nilai yang jelas berupa tanggal.
+        if re.search(r"\b(?:\d{1,2}[-/ ](?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*[-/ ]\d{2,4}|\d{4}-\d{2}-\d{2})\b", value, re.I):
+            return
+        if value not in candidates:
+            candidates.append(value)
 
-    # Keep the human-readable article name first for backward compatibility.
-    add(article.get("name", ""))
-
-    # Explicit code fields.
+    # Nama komersial artikel dan kode artikel/style dari field eksplisit.
+    add(article.get("name"))
     for key in (
         "style_code", "styleCode", "article_code", "articleCode",
-        "option_id", "optionId", "optionID", "article_id", "articleId",
-        "article_name_vl", "article_name_vh", "article_name",
+        "develop_code", "developCode", "supplier_code", "supplierCode",
+        "option_id", "optionId", "optionID",
     ):
         add(api_data.get(key))
         add(article.get(key))
 
-    # Finally inspect the whole response. This catches cases where the API
-    # nests the code deeper, while AVENIA remains only the display name.
-    for code in _collect_article_codes(api_data):
-        add(code)
+    # Jika nama artikel berbentuk "VELA1 - SNEAKER", tambahkan juga
+    # bagian nama utamanya sebagai kandidat tersendiri.
+    for value in list(candidates):
+        primary = re.split(r"\s*[-–—]\s*", value, maxsplit=1)[0].strip()
+        if primary and primary != value:
+            add(primary)
 
     return candidates
 
@@ -481,6 +482,71 @@ def build_size_qty_map(color_obj):
         if size:
             result[size] = qty
     return result
+
+
+
+
+# Master komposisi pack dari sheet "Packing List" pada file referensi ALLIRA.
+# Grid: Female Shoes / SHOES_LADIES_CASUAL, ukuran 35-41.
+EB_LADIES_PACK_HEADERS = ['12A', '12B', '12C', '12E', '12F', '12H', '12J', '12L', '4A', '4B', '4C', '6A', '6B', '6C', '6D', '8D', '8I', '8K', '8L']
+EB_LADIES_PACK_SIZES = [35, 36, 37, 38, 39, 40, 41]
+EB_LADIES_PACK_MATRIX = [[1, 1, 2, 1, 1, 3, 0, 1, 1, 0, 0, 1, 0, 1, 0, 1, 1, 0, 0], [2, 2, 2, 2, 2, 3, 2, 2, 1, 1, 0, 1, 1, 1, 1, 2, 1, 2, 1], [3, 2, 3, 2, 3, 3, 4, 2, 1, 1, 1, 2, 1, 1, 1, 2, 2, 2, 1], [3, 3, 2, 2, 2, 3, 4, 3, 1, 1, 1, 1, 2, 1, 1, 2, 2, 2, 2], [2, 2, 2, 2, 2, 0, 2, 2, 0, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2], [1, 2, 1, 2, 1, 0, 0, 1, 0, 0, 1, 0, 1, 1, 1, 0, 1, 0, 1], [0, 0, 0, 1, 1, 0, 0, 1, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1]]
+
+
+def solve_eb_ladies_sets_from_size_qty(target_qty):
+    """Cari jumlah pack integer yang menghasilkan quantity ukuran secara persis."""
+    target = []
+    for size in EB_LADIES_PACK_SIZES:
+        try:
+            value = float(target_qty.get(size, target_qty.get(str(size), 0)) or 0)
+            if not value.is_integer():
+                return None
+            target.append(int(value))
+        except (TypeError, ValueError, AttributeError):
+            return None
+
+    if not any(target):
+        return None
+
+    try:
+        import numpy as np
+        from scipy.optimize import milp, LinearConstraint, Bounds
+
+        pack_matrix = np.array(EB_LADIES_PACK_MATRIX, dtype=float)
+        target_array = np.array(target, dtype=float)
+        result = milp(
+            c=np.ones(len(EB_LADIES_PACK_HEADERS), dtype=float),
+            integrality=np.ones(len(EB_LADIES_PACK_HEADERS), dtype=int),
+            bounds=Bounds(
+                np.zeros(len(EB_LADIES_PACK_HEADERS)),
+                np.full(len(EB_LADIES_PACK_HEADERS), np.inf),
+            ),
+            constraints=LinearConstraint(pack_matrix, target_array, target_array),
+            options={"time_limit": 8, "mip_rel_gap": 0.0},
+        )
+        if not result.success or result.x is None:
+            return None
+
+        counts = np.rint(result.x).astype(int)
+        calculated = pack_matrix @ counts
+        if not np.array_equal(calculated.astype(int), np.array(target, dtype=int)):
+            return None
+
+        return {
+            code: int(count)
+            for code, count in zip(EB_LADIES_PACK_HEADERS, counts)
+            if int(count) > 0
+        }
+    except ImportError:
+        print(
+            "[SETS] FALLBACK ERROR: scipy belum ter-install. "
+            "Install dengan: pip install scipy",
+            flush=True,
+        )
+        return None
+    except Exception as solve_error:
+        print(f"[SETS] FALLBACK solver error: {solve_error}", flush=True)
+        return None
 
 
 # ==========================================================================
@@ -996,11 +1062,11 @@ def fill_template_with_res(po_code, jenis_template, api_data, output_path,datas)
                     for col, size in zip(columns, sizes):
                         safe_set_cell(ws.range(f"{col}21"), size) 
                         
-                size_columns = {}
+                bottom_size_columns = {}
                 for col in ['G', 'H', 'I', 'J', 'K','L','M']:
                     size_value = ws.range(f"{col}21").value
                     if size_value:
-                        size_columns[int(size_value)] = col
+                        bottom_size_columns[int(size_value)] = col
 
                 colors = article.get("color", []) 
                 desc_row_start = 11
@@ -1041,65 +1107,200 @@ def fill_template_with_res(po_code, jenis_template, api_data, output_path,datas)
                                 size = int(size)
                             except (ValueError, TypeError):
                                 continue
-                            col = size_columns.get(size)
+                            col = bottom_size_columns.get(size)
                             # print(f'COL:ROW :: {col}:{row}')
                             if col:
                                 safe_set_cell(ws.range(f"{col}{row}"), qty)  
 
-                location_db = "CWH" if loc_raw == "JKT" else "WMKR"
-                if ro_na_raw == "NA" or ro_na_raw == "RO":
-                    df_sets = get_grouped_po_data(location_db)
-                    size_columns = {}
-                    
-                    for col in range(5, 24):  # G=7, Y=25
-                        cell_letter = ws.range((9, col)).value
-                        if not cell_letter: 
+                # Baca data Sets dari kedua DCID. Lokasi PO tetap diprioritaskan,
+                # tetapi jika tidak ada pasangan artikel+warna di lokasi utama,
+                # sistem mencoba DCID satunya.
+                preferred_dcid = "CWH" if loc_raw == "JKT" else "WMKR"
+                other_dcid = "WMKR" if preferred_dcid == "CWH" else "CWH"
+                dcid_frames = {}
+
+                for dcid in (preferred_dcid, other_dcid):
+                    try:
+                        df_location = get_grouped_po_data(dcid)
+                        if not df_location.empty:
+                            df_location = df_location.copy()
+                            df_location["_OPTION_TOKENS"] = df_location["OptionID"].fillna("").astype(str).apply(
+                                lambda value: re.findall(r"[A-Z0-9]+", value.upper())
+                            )
+                        dcid_frames[dcid] = df_location
+                        print(
+                            f"[SETS] DCID {dcid} | Total data PO: {len(df_location)}",
+                            flush=True,
+                        )
+                    except Exception as db_error:
+                        print(f"[SETS] ERROR membaca DCID {dcid}: {db_error}", flush=True)
+                        dcid_frames[dcid] = pd.DataFrame()
+
+                article_candidates = resolve_article_candidates(api_data)
+                print(f"[SETS] Article candidates: {article_candidates}", flush=True)
+
+                # Kandidat nama dan kode dipertahankan terpisah untuk log,
+                # tetapi keduanya diuji. Pemenangnya adalah kandidat yang
+                # benar-benar mempunyai baris Sets di database.
+                size_columns = {}
+                for col in range(5, 24):
+                    cell_letter = ws.range((9, col)).value
+                    if not cell_letter:
+                        try:
                             cell_letter = ws.range((9, col)).merge_area[0, 0].value
-                        if cell_letter:
-                            col_letter = ws.range((10, col)).get_address().split('$')[1]
-                            size_columns[cell_letter.strip().upper()] = col_letter
+                        except Exception:
+                            cell_letter = None
+                    if cell_letter:
+                        col_letter = ws.range((10, col)).get_address().split("$")[1]
+                        size_columns[str(cell_letter).strip().upper()] = col_letter
 
-                    # Loop baris data warna
-                    size_suffix_list = []
-                    for row in range(11, 16):   
-                        color_name = ws.range(f"D{row}").value
-                        if color_name:
-                            color_name = "_".join(str(color_name).split())
+                size_suffix_list = []
+
+                def _tokens(value):
+                    return re.findall(r"[A-Z0-9]+", str(value or "").upper())
+
+                def _contains_sequence(source_tokens, wanted_tokens):
+                    if not wanted_tokens or len(wanted_tokens) > len(source_tokens):
+                        return False
+                    width = len(wanted_tokens)
+                    return any(
+                        source_tokens[i:i + width] == wanted_tokens
+                        for i in range(len(source_tokens) - width + 1)
+                    )
+
+                for row in range(11, 16):
+                    raw_color = ws.range(f"D{row}").value
+                    if not raw_color:
+                        continue
+
+                    color_tokens = _tokens(raw_color)
+                    color_norm = normalize(raw_color)
+                    option_ids = [format_option_id(candidate, raw_color) for candidate in article_candidates]
+                    match_df = pd.DataFrame()
+                    matched_candidate = None
+                    matched_dcid = None
+
+                    # Cari per DCID berdasarkan nama artikel maupun kode artikel.
+                    # Warna wajib cocok di bagian akhir OptionID agar tidak salah artikel.
+                    for dcid in (preferred_dcid, other_dcid):
+                        df_location = dcid_frames.get(dcid, pd.DataFrame())
+                        if df_location.empty:
+                            continue
+
+                        candidate_matches = []
+                        for candidate in article_candidates:
+                            candidate_tokens = _tokens(candidate)
+                            if not candidate_tokens:
+                                continue
+
+                            mask = df_location.apply(
+                                lambda db_row: (
+                                    _contains_sequence(db_row["_OPTION_TOKENS"][:-len(color_tokens)] if color_tokens and len(db_row["_OPTION_TOKENS"]) >= len(color_tokens) else [], candidate_tokens)
+                                    and color_tokens
+                                    and db_row["_OPTION_TOKENS"][-len(color_tokens):] == color_tokens
+                                ),
+                                axis=1,
+                            )
+                            found = df_location[mask].copy()
+                            if not found.empty:
+                                candidate_matches.append((candidate, found))
+
+                        if candidate_matches:
+                            # Utamakan kandidat yang paling spesifik/panjang.
+                            matched_candidate, match_df = max(
+                                candidate_matches,
+                                key=lambda item: len(normalize(item[0])),
+                            )
+                            matched_dcid = dcid
+                            break
+
+                    if match_df.empty:
+                        print(
+                            f"[SETS] CENTRIC NOT FOUND | candidates={article_candidates} | "
+                            f"OptionIDs tried={option_ids} | color={raw_color} | "
+                            f"DCID checked={preferred_dcid},{other_dcid}",
+                            flush=True,
+                        )
+
+                        # Fallback dari tabel size breakdown di bawah.
+                        # Row 22 adalah baris warna pertama pada template EB Shoes.
+                        fallback_row = 22 + (row - 11)
+                        bottom_size_qty = {}
+                        for shoe_size, bottom_col in bottom_size_columns.items():
+                            try:
+                                numeric_size = int(shoe_size)
+                            except (TypeError, ValueError):
+                                continue
+                            if numeric_size not in EB_LADIES_PACK_SIZES:
+                                continue
+                            raw_qty = ws.range(f"{bottom_col}{fallback_row}").value
+                            try:
+                                qty_value = int(float(raw_qty or 0))
+                            except (TypeError, ValueError):
+                                qty_value = 0
+                            bottom_size_qty[numeric_size] = qty_value
+
+                        if jenis_template == "EBL":
+                            fallback_sets = solve_eb_ladies_sets_from_size_qty(bottom_size_qty)
                         else:
-                            continue
+                            # Master komposisi yang tersedia saat ini hanya Female Shoes.
+                            fallback_sets = None
+                            print(
+                                f"[SETS] FALLBACK SKIPPED | template={jenis_template} "
+                                "| master composition for this template is not available",
+                                flush=True,
+                            )
 
-                        article_name = article.get("name", "")
-                        if article_name and article_name[0].isdigit():
-                            article_name = api_data.get("style_code", "")
-                        # print(f'ARTICLE NAME :: {api_data.get("style_code")} - COLOR :: {color_name}')
-                        option_id = format_option_id(article_name, color_name)
-                        # print(f'Option ID :: {option_id}')
-                        sets_for_option = df_sets[df_sets['OptionID'] == option_id]
-
-                        if sets_for_option.empty:
-                            print(f"[INFO] Tidak ada data Sets untuk OptionID: {option_id}") 
+                        if fallback_sets:
+                            print(
+                                f"[SETS] FALLBACK MATCHED | source=Packing List "
+                                f"| color={raw_color} | size_qty={bottom_size_qty} "
+                                f"| sets={fallback_sets}",
+                                flush=True,
+                            )
                             for size_code, col_letter in size_columns.items():
+                                ws.range(f"{col_letter}{row}").value = int(
+                                    fallback_sets.get(size_code, 0)
+                                )
+                            for pack_code, pack_qty in fallback_sets.items():
+                                if pack_qty > 0 and len(pack_code) >= 2:
+                                    suffix = pack_code[-1]
+                                    if suffix not in size_suffix_list:
+                                        size_suffix_list.append(suffix)
+                        else:
+                            print(
+                                f"[SETS] FALLBACK NOT FOUND | color={raw_color} "
+                                f"| size_qty={bottom_size_qty} "
+                                f"| no exact combination in Female Shoes Packing List",
+                                flush=True,
+                            )
+                            for _, col_letter in size_columns.items():
                                 ws.range(f"{col_letter}{row}").value = "0"
-                            continue
- 
-                        size_data = {}
-                        for _, row_set in sets_for_option.iterrows():
-                            size_pack_name = row_set['SizePackName']
-                            num_of_pack = row_set['NumofSizePack']
-                            size_code = extract_size_from_name(size_pack_name).upper() 
+                        continue
 
-                            if len(size_code) >= 2:
-                                suffix = size_code[-1]
-                                if suffix not in size_suffix_list:
-                                    size_suffix_list.append(suffix)
+                    matched_ids = match_df["OptionID"].dropna().astype(str).unique().tolist()
+                    print(
+                        f"[SETS] MATCHED | article={matched_candidate} | DCID={matched_dcid} | "
+                        f"OptionID={matched_ids} | color={raw_color}",
+                        flush=True,
+                    )
 
-                            size_data[size_code] = num_of_pack
-                
-                        for size_code, col_letter in size_columns.items():
-                            value = size_data.get(size_code, "0")
-                            if not value or pd.isna(value):
-                                value = "0"
-                            ws.range(f"{col_letter}{row}").value = value
+                    size_data = {}
+                    for _, row_set in match_df.iterrows():
+                        size_pack_name = str(row_set.get("SizePackName", ""))
+                        size_code = extract_size_from_name(size_pack_name).upper()
+                        num_of_pack = row_set.get("NumofSizePack", 0)
+                        if len(size_code) >= 2:
+                            suffix = size_code[-1]
+                            if suffix not in size_suffix_list:
+                                size_suffix_list.append(suffix)
+                        size_data[size_code] = num_of_pack
+
+                    for size_code, col_letter in size_columns.items():
+                        value = size_data.get(size_code, "0")
+                        if value is None or pd.isna(value) or value == "":
+                            value = "0"
+                        ws.range(f"{col_letter}{row}").value = value
 
                 type = "EM" if api_data.get("range", "") == "MEN" else "EL"
                 final_type = f'{type}-{loc_raw}'
